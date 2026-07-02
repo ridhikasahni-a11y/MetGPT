@@ -24,9 +24,8 @@ MetGPT is a conversational weather assistant for Ireland. It combines Google's *
 |-------|-----------|
 | Backend / web framework | **Flask** (Python) |
 | Language model | **Gemini 2.5 Flash Lite** (Google Generative AI) |
-| Weather data | **Met Éireann Open API** (forecasts) + **Met Éireann Alerts RSS** (warnings) |
+| Weather data | **Met Éireann Open API** (forecasts) |
 | Geocoding | **LocationIQ** (forward + reverse) |
-| IP fallback location | **ip-api.com** |
 | Frontend | HTML, CSS, vanilla JavaScript |
 | Session storage | Flask-Session (filesystem) |
 
@@ -71,7 +70,7 @@ The orchestration lives in `process_query()` in `app.py`.
 metgpt/
 ├── app.py                 # Flask app: routes, auth, LLM pipeline, weather logic
 ├── requirements.txt       # Python dependencies
-├── .env                   # API keys & user accounts (NOT committed)
+├── .env                   # API keys & user accounts
 ├── templates/
 │   ├── index.html         # Main chat interface
 │   └── login.html         # Login page
@@ -161,15 +160,6 @@ This separation — LLM for language, official API for facts — is the core des
 
 ---
 
-## Scope & Limitations
-
-- **Ireland only.** Met Éireann covers Irish locations; MetGPT refuses locations elsewhere.
-- **Forecasts up to ~9 days ahead.** Past dates and dates beyond the forecast window return a clear "no data" message rather than a guess.
-- **Session-scoped memory.** Conversation history lasts for the session; it is not stored long-term. Signing out or clearing the chat wipes it.
-- **Plaintext credentials in `.env`.** Suitable for a small, trusted set of users. For production-grade auth, use hashed passwords and a database.
-
----
-
 ## Deployment Notes
 
 When deploying (e.g. Railway, Render):
@@ -180,14 +170,6 @@ When deploying (e.g. Railway, Render):
 
 ---
 
-## Credits
-
-- Forecast data & warnings: **Met Éireann** (Irish National Meteorological Service)
-- Geocoding: **LocationIQ**
-- Language model: **Google Gemini 2.5 Flash Lite**
-
----
-
 ## License
 
-This project was developed for academic/dissertation purposes. Weather data is provided by Met Éireann under their open data terms; please review Met Éireann's licensing before any commercial use.
+This project was developed for academic/dissertation purposes. Weather data is provided by Met Éireann under their open data terms.
