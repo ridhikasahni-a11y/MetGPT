@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 MetGPT - AI Weather Assistant
+Flask app using Gemini 2.5 Flash Lite + LocationIQ + Met Eireann Open API
 """
 
 from dotenv import load_dotenv
@@ -42,12 +43,24 @@ app = Flask(__name__)
 # Use a stable secret from .env so logins survive server restarts.
 # Falls back to a random key if not set (sessions reset on restart).
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_urlsafe(32)
-app.config["SESSION_TYPE"] = "filesystem"
-SESSION_DIR = "/tmp/flask_session_metgpt"
-os.makedirs(SESSION_DIR, exist_ok=True)
-app.config["SESSION_FILE_DIR"] = SESSION_DIR
-app.config["SESSION_PERMANENT"] = False
-Session(app)
+# Cookie settings — needed for sessions to work over HTTPS (e.g. on Railway)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Only require HTTPS-only cookies in production (Railway sets RAILWAY_ENVIRONMENT)
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("RAILWAY_ENVIRONMENT") is not None
+
+# Session backend: use Flask's built-in signed-cookie sessions in production
+# (works across gunicorn workers with no shared filesystem). Locally we can
+# use filesystem sessions for larger chat histories.
+USE_COOKIE_SESSIONS = os.getenv("RAILWAY_ENVIRONMENT") is not None
+if not USE_COOKIE_SESSIONS:
+    app.config["SESSION_TYPE"] = "filesystem"
+    SESSION_DIR = "/tmp/flask_session_metgpt"
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    app.config["SESSION_FILE_DIR"] = SESSION_DIR
+    app.config["SESSION_PERMANENT"] = False
+    Session(app)
+# else: default Flask cookie sessions (no Session(app) call needed)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
@@ -833,8 +846,10 @@ def chat():
     if combined_advice:
         session["chat_history"].append({"role": "assistant", "content": combined_advice})
 
-    if len(session["chat_history"]) > 40:
-        session["chat_history"] = session["chat_history"][-40:]
+    # Trim history so it fits within cookie-session size limits on Railway.
+    max_history = 10 if USE_COOKIE_SESSIONS else 40
+    if len(session["chat_history"]) > max_history:
+        session["chat_history"] = session["chat_history"][-max_history:]
 
     session["last_valid_locs"] = new_locs
     session["last_dates"] = new_dates
