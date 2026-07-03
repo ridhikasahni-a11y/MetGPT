@@ -69,15 +69,6 @@
   .layout.sidebar-collapsed .sidebar { display: none; }
 
   /* Use my location button */
-  .home-display {
-    border: 0.5px solid var(--gray-200);
-    border-radius: var(--radius);
-    background: var(--gray-50);
-    color: var(--gray-900);
-    padding: 8px 10px;
-    font-size: 13px;
-    min-height: 18px;
-  }
   .btn-geo {
     display: flex;
     align-items: center;
@@ -121,12 +112,12 @@
     <div class="sidebar-settings">
       <div class="sidebar-section">
         <label class="section-label">Home location</label>
-        <div class="home-display" id="home-display">{{ home_location if home_location else 'Not set' }}</div>
+        <input type="text" id="home-input" placeholder="e.g. Dublin" value="{{ home_location }}">
         <button class="btn-geo" onclick="useMyLocation()" type="button">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
           Use my location
         </button>
-        <p class="field-hint">Detected via GPS · used when no location is mentioned</p>
+        <p class="field-hint">Type a location or detect via GPS · used when none is mentioned in chat</p>
       </div>
 
       <div class="sidebar-section">
@@ -146,7 +137,7 @@
 
       <button class="btn-save" id="save-settings">Save settings</button>
       <p class="save-status" id="save-status"></p>
-      
+
     </div>
   </aside>
 

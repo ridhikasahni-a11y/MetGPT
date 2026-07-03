@@ -289,7 +289,7 @@ function useMyLocation() {
   const status = document.getElementById('save-status');
   if (!navigator.geolocation) {
     status.style.color = '#A32D2D';
-    status.textContent = 'Geolocation not supported by your browser.';
+    status.textContent = 'GPS not supported. Please type a location above instead.';
     return;
   }
   status.style.color = '#5F5E5A';
@@ -307,8 +307,8 @@ function useMyLocation() {
           status.style.color = '#A32D2D';
           status.textContent = data.error;
         } else {
-          const disp = document.getElementById('home-display');
-          if (disp) disp.textContent = data.home;
+          const inp = document.getElementById('home-input');
+          if (inp) inp.value = data.home;
           status.style.color = '#1D9E75';
           status.textContent = 'Location set: ' + data.home;
           setTimeout(() => { status.textContent = ''; }, 3000);
@@ -318,7 +318,7 @@ function useMyLocation() {
     },
     err => {
       status.style.color = '#A32D2D';
-      status.textContent = 'Could not get location: ' + err.message;
+      status.textContent = 'Could not get GPS location. Please type a location above instead.';
     },
     { enableHighAccuracy: true, timeout: 10000 }
   );
