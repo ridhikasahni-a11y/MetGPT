@@ -1,67 +1,106 @@
-/* MetGPT — style.css */
+/* MetGPT — style.css (Met Éireann navy theme) */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --teal:       #1D9E75;
-  --teal-light: #E1F5EE;
-  --teal-mid:   #9FE1CB;
-  --teal-dark:  #085041;
-  --amber:      #BA7517;
-  --amber-bg:   #FAEEDA;
+  /* Met Éireann deep navy brand */
+  --teal:       #12395D;  /* primary navy (kept var name for compatibility) */
+  --teal-light: #E3ECF4;  /* pale navy tint */
+  --teal-mid:   #A9C2DA;  /* mid navy */
+  --teal-dark:  #0A2540;  /* deepest navy */
+  --amber:      #B8860B;
+  --amber-bg:   #FBF0D8;
   --red:        #A32D2D;
   --red-bg:     #FCEBEB;
-  --blue:       #185FA5;
-  --blue-bg:    #E6F1FB;
-  --gray-50:    #F8F8F7;
-  --gray-100:   #F1EFE8;
-  --gray-200:   #D3D1C7;
-  --gray-400:   #888780;
-  --gray-600:   #5F5E5A;
-  --gray-900:   #1C1C1A;
+  --blue:       #2563C9;  /* vivid accent blue */
+  --blue-bg:    #DCEBFC;
+  --gray-50:    #F5F9FE;
+  --gray-100:   #E9F1F9;
+  --gray-200:   #CBD9E7;
+  --gray-400:   #7688A0;
+  --gray-600:   #46586E;
+  --gray-900:   #12212E;
   --bg:         #FFFFFF;
   --radius:     10px;
   --radius-lg:  14px;
+  /* Accent colours for splashes of life */
+  --sun:        #FFB020;
+  --sun-soft:   #FFF1D6;
+  --sky:        #3B9AE1;
+  --sky-soft:   #DCF0FB;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:        #1A1A18;
-    --gray-50:   #222220;
-    --gray-100:  #2A2A28;
-    --gray-200:  #3A3A38;
-    --gray-400:  #888780;
-    --gray-600:  #AAAAAA;
-    --gray-900:  #F0EFE8;
-    --teal-light:#04342C;
-    --teal-mid:  #085041;
-    --blue-bg:   #042C53;
-    --amber-bg:  #412402;
-    --red-bg:    #501313;
+    --bg:        #0E1A26;
+    --gray-50:   #142130;
+    --gray-100:  #1B2A3A;
+    --gray-200:  #2C3E50;
+    --gray-400:  #8595A5;
+    --gray-600:  #AEBCC9;
+    --gray-900:  #EAF1F8;
+    --teal:      #4F8FC0;
+    --teal-light:#12293E;
+    --teal-mid:  #23384D;
+    --teal-dark: #CFE0EF;
+    --blue:      #6BA6DC;
+    --blue-bg:   #12293E;
+    --amber-bg:  #3A2C08;
+    --red-bg:    #401414;
   }
 }
 
 html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--gray-900); font-size: 15px; line-height: 1.6; }
 
-/* Layout */
-.layout { display: flex; height: 100vh; }
+/* Layout — brighter sky gradient backdrop */
+.layout {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  background: linear-gradient(160deg, #CFE4FA 0%, #DDEEFB 35%, #EAF4FE 70%, #F5FAFF 100%);
+}
 
-/* Sidebar */
+/* Sidebar — navy gradient, Met Éireann branding */
 .sidebar {
   width: 260px;
   min-width: 260px;
-  border-right: 0.5px solid var(--gray-200);
-  background: var(--gray-50);
+  border-right: none;
+  background: linear-gradient(180deg, #0A2540 0%, #12395D 55%, #164A78 100%);
   display: flex;
   flex-direction: column;
   padding: 1.5rem 1.25rem;
   gap: 1.25rem;
   overflow-y: auto;
 }
+.sidebar .section-label { color: rgba(255,255,255,0.6); }
+.sidebar .field-hint { color: rgba(255,255,255,0.5); }
+.sidebar input[type="text"],
+.sidebar textarea {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+}
+.sidebar input[type="text"]::placeholder,
+.sidebar textarea::placeholder { color: rgba(255,255,255,0.45); }
+.sidebar input[type="text"]:focus,
+.sidebar textarea:focus {
+  border-color: #6FA8D6;
+  box-shadow: 0 0 0 2px rgba(111,168,214,0.3);
+  background: rgba(255,255,255,0.15);
+}
 
-.sidebar-header { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0.75rem 0.9rem;
+  margin: -0.5rem -0.25rem 0;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--radius-lg);
+}
 .logo { display: flex; align-items: center; gap: 8px; }
-.logo-text { font-size: 18px; font-weight: 600; color: var(--teal); letter-spacing: -0.3px; }
-.logo-sub { font-size: 12px; color: var(--gray-400); }
+.logo-text { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: -0.3px; }
+.logo-sub { font-size: 12px; color: rgba(255,255,255,0.7); }
 
 .sidebar-section { display: flex; flex-direction: column; gap: 6px; }
 .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--gray-400); }
@@ -81,7 +120,7 @@ textarea {
   transition: border-color 0.15s;
 }
 input[type="text"]:focus,
-textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,117,0.15); }
+textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,0.15); }
 
 .field-hint { font-size: 11px; color: var(--gray-400); }
 
@@ -110,7 +149,7 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--bg);
+  background: transparent;
 }
 
 .chat-topbar {
@@ -119,6 +158,10 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   justify-content: space-between;
   padding: 1rem 1.5rem;
   border-bottom: 0.5px solid var(--gray-200);
+  gap: 10px;
+  background: rgba(255,255,255,0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .chat-title { font-size: 16px; font-weight: 600; }
 .chat-sub { font-size: 12px; color: var(--gray-400); }
@@ -150,25 +193,28 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
 
 /* Welcome */
 .welcome-card {
-  background: var(--teal-light);
+  background: linear-gradient(135deg, #E8F4FF 0%, #F0E9FF 100%);
+  border: 1px solid rgba(37,99,201,0.12);
   border-radius: var(--radius-lg);
   padding: 1.25rem 1.5rem;
   max-width: 560px;
+  box-shadow: 0 4px 16px rgba(18,57,93,0.06);
 }
-.welcome-title { font-size: 15px; font-weight: 600; color: var(--teal-dark); margin-bottom: 4px; }
-.welcome-body { font-size: 13px; color: var(--teal-dark); opacity: 0.85; margin-bottom: 1rem; }
-.suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+.welcome-title { font-size: 16px; font-weight: 700; color: var(--teal-dark); margin-bottom: 4px; }
+.welcome-body { font-size: 13px; color: var(--gray-600); margin-bottom: 1rem; }
+.suggestions { display: flex; flex-wrap: wrap; gap: 8px; }
 .suggestion {
-  background: var(--bg);
-  border: 0.5px solid var(--teal-mid);
+  background: #fff;
+  border: 1px solid var(--sky);
   border-radius: 20px;
-  padding: 5px 12px;
+  padding: 6px 14px;
   font-size: 12px;
-  color: var(--teal);
+  font-weight: 500;
+  color: var(--blue);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: all 0.15s;
 }
-.suggestion:hover { background: var(--teal-light); }
+.suggestion:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
 
 /* Message bubbles */
 .msg { display: flex; gap: 10px; align-items: flex-start; max-width: 700px; }
@@ -185,7 +231,7 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   font-weight: 600;
   flex-shrink: 0;
 }
-.msg.user .msg-avatar { background: var(--teal); color: #fff; }
+.msg.user .msg-avatar { background: linear-gradient(135deg, var(--teal), var(--blue)); color: #fff; }
 .msg.assistant .msg-avatar { background: var(--teal-light); color: var(--teal); }
 
 .msg-content { display: flex; flex-direction: column; gap: 6px; }
@@ -199,14 +245,16 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   max-width: 520px;
 }
 .msg.user .bubble {
-  background: var(--teal);
+  background: linear-gradient(135deg, var(--teal), var(--blue));
   color: #fff;
   border-bottom-right-radius: 4px;
 }
 .msg.assistant .bubble {
-  background: var(--gray-100);
+  background: #FFFFFF;
   color: var(--gray-900);
+  border: 1px solid var(--gray-200);
   border-bottom-left-radius: 4px;
+  box-shadow: 0 2px 8px rgba(18,57,93,0.05);
 }
 
 /* Response parts inside assistant msg */
@@ -237,52 +285,106 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
 
 /* Forecast card */
 .forecast-card {
-  background: var(--blue-bg);
+  background: #FFFFFF;
+  border: 0.5px solid var(--gray-200);
   border-radius: var(--radius-lg);
-  padding: 12px 14px;
-  min-width: 240px;
-  max-width: 380px;
+  padding: 0;
+  min-width: 280px;
+  max-width: 420px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(18,57,93,0.10);
 }
-.fc-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
-.fc-location { font-size: 13px; font-weight: 600; color: var(--blue); }
-.fc-date { font-size: 11px; color: var(--gray-400); }
+.fc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--teal-dark) 0%, var(--blue) 100%);
+}
+.fc-header-left { display: flex; align-items: center; gap: 10px; }
+.fc-weather-icon { color: #FFD764; flex-shrink: 0; }
+.fc-location { font-size: 15px; font-weight: 700; color: #fff; }
+.fc-date { font-size: 11px; color: rgba(255,255,255,0.75); }
 
-.fc-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
-.fc-metric { display: flex; flex-direction: column; gap: 2px; }
-.fc-metric-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--gray-400); }
-.fc-metric-value { font-size: 15px; font-weight: 600; color: var(--blue); }
+.fc-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; padding-bottom: 8px; }
+.fc-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--gray-50);
+  border-radius: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--blue);
+}
+.fc-metric-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--gray-400);
+}
+.fc-metric-value { font-size: 16px; font-weight: 700; color: var(--blue); }
+
+/* Uniform blue metric tiles (clean, Met Éireann style) */
+.fc-metric--tempc,
+.fc-metric--tempf,
+.fc-metric--rain,
+.fc-metric--chance,
+.fc-metric--wind,
+.fc-metric--humidity { background: var(--gray-50); border-left-color: var(--blue); }
+
+.fc-metric--tempc .fc-metric-label,
+.fc-metric--tempf .fc-metric-label,
+.fc-metric--rain .fc-metric-label,
+.fc-metric--chance .fc-metric-label,
+.fc-metric--wind .fc-metric-label,
+.fc-metric--humidity .fc-metric-label { color: var(--gray-400); }
+
+.fc-metric--tempc .fc-metric-value,
+.fc-metric--tempf .fc-metric-value,
+.fc-metric--rain .fc-metric-value,
+.fc-metric--chance .fc-metric-value,
+.fc-metric--wind .fc-metric-value,
+.fc-metric--humidity .fc-metric-value { color: var(--blue); }
 
 .fc-hourly-toggle {
-  background: none;
+  background: var(--gray-50);
   border: 0.5px solid var(--gray-200);
   border-radius: var(--radius);
-  padding: 5px 10px;
+  padding: 8px 10px;
   font-size: 11px;
   color: var(--gray-600);
   cursor: pointer;
-  width: 100%;
+  width: calc(100% - 28px);
+  margin: 0 14px 14px;
   text-align: left;
 }
 .fc-hourly-toggle:hover { background: var(--gray-100); }
 
-.fc-hourly { display: none; margin-top: 8px; }
+.fc-hourly { display: none; margin: 0 14px 14px; overflow-x: auto; }
 .fc-hourly.open { display: block; }
 .fc-hourly-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .fc-hourly-table th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--gray-400); padding: 4px 4px; text-align: left; border-bottom: 0.5px solid var(--gray-200); }
-.fc-hourly-table td { padding: 3px 4px; color: var(--gray-900); border-bottom: 0.5px solid var(--gray-200); }
+.fc-hourly-table td { padding: 3px 4px; color: var(--gray-900); border-bottom: 0.5px solid var(--gray-200); white-space: nowrap; }
 .fc-hourly-table tr:last-child td { border-bottom: none; }
 
 /* Advice bubble */
 .advice-bubble {
-  background: var(--gray-100);
+  background: #FFFFFF;
+  border: 1px solid var(--gray-200);
   border-radius: 14px;
   border-bottom-left-radius: 4px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   font-size: 14px;
   line-height: 1.6;
   color: var(--gray-900);
   max-width: 520px;
   white-space: pre-wrap;
+  box-shadow: 0 2px 8px rgba(18,57,93,0.05);
 }
 
 /* Typing indicator */
@@ -299,15 +401,18 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   gap: 10px;
   padding: 1rem 1.5rem;
   border-top: 0.5px solid var(--gray-200);
+  background: rgba(255,255,255,0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .chat-textarea {
   flex: 1;
   border: 0.5px solid var(--gray-200);
   border-radius: 12px;
-  background: var(--gray-50);
+  background: rgba(255,255,255,0.9);
   color: var(--gray-900);
   padding: 10px 14px;
-  font-size: 14px;
+  font-size: 16px;              /* 16px avoids iOS zoom-on-focus */
   font-family: inherit;
   resize: none;
   outline: none;
@@ -316,13 +421,13 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   transition: border-color 0.15s;
   line-height: 1.5;
 }
-.chat-textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,117,0.15); }
+.chat-textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,0.15); }
 
 .btn-send {
   width: 38px;
   height: 38px;
   border-radius: 50%;
-  background: var(--teal);
+  background: linear-gradient(135deg, var(--teal), var(--blue));
   color: #fff;
   border: none;
   display: flex;
@@ -341,22 +446,74 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
 .chat-window::-webkit-scrollbar { width: 4px; }
 .chat-window::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 4px; }
 
-/* Mobile */
-@media (max-width: 640px) {
-  .sidebar { display: none; }
+/* Sidebar toggle button (hamburger) — hidden on desktop, shown on mobile */
+.sidebar-toggle { display: none; }
+
+/* Overlay behind the mobile sidebar */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 40;
+}
+.sidebar-overlay.open { display: block; }
+
+/* ─── Mobile ─────────────────────────────────────────────────────────────── */
+@media (max-width: 760px) {
+  /* Sidebar becomes a slide-in drawer */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.15);
+  }
+  .layout.sidebar-open .sidebar { transform: translateX(0); }
+
+  /* Show the hamburger on mobile */
+  .sidebar-toggle {
+    display: flex !important;
+    background: none;
+    border: 0.5px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    color: var(--gray-600);
+    cursor: pointer;
+    align-items: center;
+  }
+
   .chat-topbar { padding: 0.75rem 1rem; }
+  .chat-sub { display: none; }
   .chat-window { padding: 1rem; }
   .chat-input-row { padding: 0.75rem 1rem; }
+
+  /* Hide the username label on small screens to save space */
+  .topbar-actions span { display: none; }
+
+  /* Cards and bubbles use full width on mobile */
+  .forecast-card, .week-summary, .advice-bubble, .bubble { max-width: 100%; }
+  .msg { max-width: 100%; }
+
+  /* Sign-out text hidden, icon only */
+  .btn-logout { padding: 6px 8px; }
+  .btn-logout span, .btn-clear span { display: none; }
 }
 
 /* ─── Week summary (compact multi-day view) ──────────────────────────────── */
 
 .week-summary {
-  background: var(--blue-bg);
+  background: linear-gradient(135deg, var(--blue-bg) 0%, var(--teal-light) 100%);
+  border: 0.5px solid var(--gray-200);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
   max-width: 420px;
   margin-bottom: 4px;
+  box-shadow: 0 2px 10px rgba(18,57,93,0.06);
 }
 
 .week-head {
@@ -403,3 +560,4 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(29,158,11
   text-align: right;
   color: var(--gray-900);
 }
+.fc-row-f { font-size: 10px; color: var(--gray-400); font-weight: 500; }

@@ -210,15 +210,17 @@ Today is {today.strftime('%Y-%m-%d')} ({today.strftime('%A')}).
 
 Extract location and date references from the CURRENT user message only.
 Return ONLY a JSON list of objects, each with:
-  - "location": the place name ONLY if it literally appears in the current user message; otherwise null. NEVER infer or copy a location from the history.
+  - "location": a place name ONLY if the word is genuinely an Irish place (city, town, village, county, area). Set it to null if the word is a time reference, an abbreviation, a greeting, or anything that is not a real place. NEVER infer or copy a location from the history.
   - "date": "YYYY-MM-DD" or null
+
+Important: time-related words and their abbreviations (for example tomorrow, tom, tmrw, tmr, tonight, today, tdy, this evening, the weekend) are DATES, never locations. If you are unsure whether a word is a place, set location to null rather than guessing.
 
 Date rules (apply to the CURRENT message only):
 - "this week" / "coming week" / "next 7 days" / "the week" -> one object per day for the next 7 days
 - "this weekend" / "weekend" -> the upcoming Saturday and Sunday
 - "next few days" -> the next 3 days
-- "tomorrow" -> tomorrow's date only
-- "today" / "now" / "right now" -> today's date only
+- any wording meaning the next day (tomorrow, tom, tmrw, 2moro, etc.) -> tomorrow's date only
+- any wording meaning the current day (today, now, tonight, tdy) -> today's date only
 - a specific weekday or calendar date -> that single date
 - if the current message mentions no date at all -> a single object with date = today's date
 
@@ -336,6 +338,22 @@ def geocode_location(name: str):
                 display = clean or r.get("display_name", name)
                 logger.info("Geocoded '%s' -> %s (%s/%s)", name, display, r_class, r_type)
                 return lat, lon, display
+
+        # Fallback: if the query itself already looks like a resolved place name
+        # (contains a comma, e.g. "Dublin, Leinster, Ireland" reused from a
+        # previous turn) and LocationIQ returned any Irish result, accept the
+        # first one. This avoids rejecting already-geocoded display names.
+        if "," in name and results:
+            r = results[0]
+            addr = r.get("address", {})
+            if (addr.get("country_code") or "").lower() == "ie":
+                lat = float(r["lat"])
+                lon = float(r["lon"])
+                clean = (addr.get("city") or addr.get("town") or addr.get("village")
+                         or addr.get("hamlet") or addr.get("suburb") or addr.get("county")
+                         or r.get("display_name", name))
+                logger.info("Geocoded (fallback) '%s' -> %s", name, clean)
+                return lat, lon, clean
 
         # Nothing acceptable found (e.g. only a business matched)
         logger.info("Geocode rejected '%s' — no settlement match in Ireland", name)
@@ -538,9 +556,13 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
         loc = f.get("location", "N/A")
         date = f.get("date", "N/A")
         fc = f.get("forecast", {})
+        def c2f(c):
+            return round(c * 9 / 5 + 32) if c is not None else None
+        tmin, tmax = fc.get("temp_min"), fc.get("temp_max")
+        tmin_f, tmax_f = c2f(tmin), c2f(tmax)
         lines.append(
             f"Location: {loc}, Date: {date} | "
-            f"Temp: {fc.get('temp_min')}–{fc.get('temp_max')}°C | "
+            f"Temp: {tmin}-{tmax}°C ({tmin_f}-{tmax_f}°F) | "
             f"Rain: {fc.get('rain_total')}mm ({fc.get('rain_prob_avg')}% chance) | "
             f"Wind: {fc.get('wind_avg')} m/s | Humidity: {fc.get('humidity_avg')}%"
         )
@@ -578,6 +600,7 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
 
     prompt = f"""{intro}You are MetGPT, a helpful Irish weather assistant. Today is {today_str}.
 When mentioning any date, calculate the correct day of the week from the date string in the data — do not guess. This query is classified as "{query_type}".
+Always give temperatures in both Celsius and Fahrenheit, e.g. "around 19°C (66°F)".
 {length_note}{range_note}
 User asked: {user_text}
 
@@ -682,7 +705,7 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
         valid_locs = [{"location": base_loc, "date": d["date"]} for d in date_only]
         responses.append({"type": "info", "text": f"Showing {len(date_only)} days for {base_loc}"})
 
-    # 6) Still nothing → home location, then IP fallback
+    # 6) Still nothing → home location, then ask the user to provide one
     if not valid_locs:
         home = session.get("user_home_location")
         if home:
@@ -694,15 +717,12 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
             else:
                 responses.append({"type": "info", "text": f"No location mentioned — using your home location: {home}"})
         else:
-            ip_lat, ip_lon, ip_name = get_ip_location()
-            if ip_lat:
-                today = datetime.now().strftime("%Y-%m-%d")
-                dates = [d["date"] for d in date_only] if date_only else [today]
-                valid_locs = [{"location": ip_name, "date": d} for d in dates]
-                responses.append({"type": "info", "text": f"No location mentioned — using your detected location: {ip_name}"})
-            else:
-                responses.append({"type": "error", "text": "Please mention a location in Ireland so I can check the forecast for you."})
-                return responses, prev_locs or [], prev_dates or []
+            responses.append({
+                "type": "error",
+                "text": ("Please enter an Irish location — either type one in your question "
+                         "(e.g. \"weather in Galway tomorrow\") or set a home location on the left."),
+            })
+            return responses, prev_locs or [], prev_dates or []
 
     activities = extract_activities(user_text, history)
 
