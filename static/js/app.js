@@ -203,13 +203,26 @@ function toF(c) {
   return Math.round(c * 9 / 5 + 32);
 }
 
+// Format wind in m/s, km/h and mph
+function windStr(ms) {
+  if (ms == null) return 'N/A';
+  const kmh = Math.round(ms * 3.6);
+  const mph = Math.round(ms * 2.23694);
+  return `${ms} m/s · ${kmh} km/h · ${mph} mph`;
+}
+function windShort(ms) {
+  if (ms == null) return '—';
+  const kmh = Math.round(ms * 3.6);
+  return `${ms} m/s (${kmh} km/h)`;
+}
+
 function buildForecastCard(r) {
   const tempStr = (r.temp_min != null && r.temp_max != null)
     ? `${r.temp_min}–${r.temp_max}°C (${toF(r.temp_min)}–${toF(r.temp_max)}°F)`
     : 'N/A';
   const rainStr = r.rain_total != null ? `${r.rain_total} mm` : 'N/A';
   const probStr = r.rain_prob != null ? `${Math.round(r.rain_prob)}%` : 'N/A';
-  const windStr = r.wind_avg != null ? `${r.wind_avg} m/s` : 'N/A';
+  const windDisp = r.wind_avg != null ? windShort(r.wind_avg) : 'N/A';
   const humStr  = r.humidity != null ? `${Math.round(r.humidity)}%` : 'N/A';
 
   // Compact row for multi-day (week) view
@@ -228,7 +241,7 @@ function buildForecastCard(r) {
       <span class="fc-row-day">${dayName}</span>
       <span class="fc-row-temp">${tCompact}</span>
       <span class="fc-row-rain">${rainStr} · ${probStr}</span>
-      <span class="fc-row-wind">${windStr}</span>`;
+      <span class="fc-row-wind">${windDisp}</span>`;
     return row;
   }
 
@@ -261,7 +274,7 @@ function buildForecastCard(r) {
       <div class="fc-metric fc-metric--tempf"><span class="fc-metric-label">${ic.tempf} Temp °F</span><span class="fc-metric-value">${fRange}</span></div>
       <div class="fc-metric fc-metric--rain"><span class="fc-metric-label">${ic.rain} Rain total</span><span class="fc-metric-value">${rainStr}</span></div>
       <div class="fc-metric fc-metric--chance"><span class="fc-metric-label">${ic.chance} Rain chance</span><span class="fc-metric-value">${probStr}</span></div>
-      <div class="fc-metric fc-metric--wind"><span class="fc-metric-label">${ic.wind} Wind avg</span><span class="fc-metric-value">${windStr}</span></div>
+      <div class="fc-metric fc-metric--wind"><span class="fc-metric-label">${ic.wind} Wind avg</span><span class="fc-metric-value">${windDisp}</span></div>
       <div class="fc-metric fc-metric--humidity"><span class="fc-metric-label">${ic.hum} Humidity</span><span class="fc-metric-value">${humStr}</span></div>
     </div>
     <button class="fc-hourly-toggle" onclick="toggleHourly('${uid}', this)">Show hourly breakdown ▾</button>
@@ -280,7 +293,7 @@ function buildHourlyTable(hourly) {
     const temp  = h.temperature  != null ? `${h.temperature}°C / ${toF(h.temperature)}°F` : '—';
     const rain  = h.rain_mm      != null ? `${h.rain_mm}mm`        : '—';
     const prob  = h.rain_prob    != null ? `${Math.round(h.rain_prob)}%` : '—';
-    const wind  = h.wind         != null ? `${h.wind}m/s`          : '—';
+    const wind  = h.wind         != null ? `${h.wind}m/s (${Math.round(h.wind*3.6)}km/h)` : '—';
     const dir   = h.wind_direction || '—';
     const cloud = h.cloudiness   != null ? `${Math.round(h.cloudiness)}%` : '—';
     return `<tr>

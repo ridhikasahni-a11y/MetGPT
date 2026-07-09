@@ -29,25 +29,8 @@
   --sky-soft:   #DCF0FB;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg:        #0E1A26;
-    --gray-50:   #142130;
-    --gray-100:  #1B2A3A;
-    --gray-200:  #2C3E50;
-    --gray-400:  #8595A5;
-    --gray-600:  #AEBCC9;
-    --gray-900:  #EAF1F8;
-    --teal:      #4F8FC0;
-    --teal-light:#12293E;
-    --teal-mid:  #23384D;
-    --teal-dark: #CFE0EF;
-    --blue:      #6BA6DC;
-    --blue-bg:   #12293E;
-    --amber-bg:  #3A2C08;
-    --red-bg:    #401414;
-  }
-}
+/* App is always light-themed — prevent the OS dark mode from altering colours */
+:root { color-scheme: light; }
 
 html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--gray-900); font-size: 15px; line-height: 1.6; }
 
@@ -351,6 +334,9 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,
 .fc-metric--wind .fc-metric-value,
 .fc-metric--humidity .fc-metric-value { color: var(--blue); }
 
+.fc-metric--wind { grid-column: 1 / -1; }
+.fc-metric--wind .fc-metric-value { font-size: 14px; }
+
 .fc-hourly-toggle {
   background: var(--gray-50);
   border: 0.5px solid var(--gray-200);
@@ -560,4 +546,4 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,
   text-align: right;
   color: var(--gray-900);
 }
-.fc-row-f { font-size: 10px; color: var(--gray-400); font-weight: 500; }
+.fc-row-f { font-size: 11px; color: var(--blue); font-weight: 600; opacity: 0.85; }

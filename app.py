@@ -560,11 +560,13 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
             return round(c * 9 / 5 + 32) if c is not None else None
         tmin, tmax = fc.get("temp_min"), fc.get("temp_max")
         tmin_f, tmax_f = c2f(tmin), c2f(tmax)
+        wind_ms = fc.get('wind_avg')
+        wind_kmh = round(wind_ms * 3.6) if wind_ms is not None else None
         lines.append(
             f"Location: {loc}, Date: {date} | "
             f"Temp: {tmin}-{tmax}°C ({tmin_f}-{tmax_f}°F) | "
             f"Rain: {fc.get('rain_total')}mm ({fc.get('rain_prob_avg')}% chance) | "
-            f"Wind: {fc.get('wind_avg')} m/s | Humidity: {fc.get('humidity_avg')}%"
+            f"Wind: {wind_ms} m/s ({wind_kmh} km/h) | Humidity: {fc.get('humidity_avg')}%"
         )
         for hr in sorted(f.get("hourly_data", []), key=lambda x: x.get("time_str", "")):
             parts = []
@@ -601,6 +603,7 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
     prompt = f"""{intro}You are MetGPT, a helpful Irish weather assistant. Today is {today_str}.
 When mentioning any date, calculate the correct day of the week from the date string in the data — do not guess. This query is classified as "{query_type}".
 Always give temperatures in both Celsius and Fahrenheit, e.g. "around 19°C (66°F)".
+Always give wind speed in both m/s and km/h, e.g. "around 4 m/s (14 km/h)".
 {length_note}{range_note}
 User asked: {user_text}
 
