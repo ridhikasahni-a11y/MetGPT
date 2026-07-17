@@ -298,6 +298,15 @@ _geo_cache = TTLCache(maxsize=500, ttl=3600)
 
 @cached(_geo_cache)
 def geocode_location(name: str):
+    """Returns (lat, lon, display_name, ambiguous_counties).
+
+    ambiguous_counties is None for a normal resolution. It's a sorted list of
+    county names when the query name matches multiple distinct places (in
+    different counties) with no single clearly-dominant match — e.g. "Glebe"
+    or "Newcastle", which are shared by many unrelated townlands/villages
+    across Ireland. In that case lat/lon/display_name are None and the
+    caller should ask the user to disambiguate.
+    """
     url = "https://us1.locationiq.com/v1/search.php"
     params = {
         "key": LOCATIONIQ_KEY,
@@ -305,39 +314,109 @@ def geocode_location(name: str):
         "format": "json",
         "countrycodes": "ie",
         "addressdetails": 1,
-        "limit": 5,
+        "limit": 30,
     }
 
-    # Only accept real settlements / administrative areas — not businesses,
-    # shops, restaurants, etc. This stops "delhi" matching "Delhi Rasoi".
+    # Only accept real settlements / administrative areas / notable natural
+    # features — not businesses, shops, restaurants, etc. This stops "delhi"
+    # matching "Delhi Rasoi", while still allowing places like beaches/bays
+    # that people ask about weather for (e.g. "Brittas Bay").
     ALLOWED_CLASSES = {"place", "boundary"}
     ALLOWED_TYPES = {
         "city", "town", "village", "hamlet", "suburb", "neighbourhood",
         "locality", "municipality", "county", "state", "administrative",
-        "island", "townland",
+        "island", "townland", "beach", "bay",
     }
+    # Real, recognisable named settlements — as opposed to administrative
+    # artifacts like electoral divisions/townlands, which share generic
+    # names (e.g. "Glebe") across dozens of unrelated places.
+    SETTLEMENT_TYPES = {"city", "town", "village", "hamlet", "suburb"}
+    # A match this much less important than the top match is considered a
+    # long tail, not a genuine competing candidate for ambiguity purposes.
+    # Only used as a fallback when there's no clash between real settlements.
+    AMBIGUITY_IMPORTANCE_MARGIN = 0.03
 
     try:
         resp = requests.get(url, params=params, timeout=5)
         resp.raise_for_status()
         results = resp.json()
         if not isinstance(results, list):
-            return None, None, name
+            return None, None, name, None
 
+        accepted = []
         for r in results:
             r_class = (r.get("class") or "").lower()
             r_type = (r.get("type") or "").lower()
-            # Accept only genuine settlements / admin areas
+            # Accept only genuine settlements / admin areas / allowed natural features
             if r_class in ALLOWED_CLASSES or r_type in ALLOWED_TYPES:
-                lat = float(r["lat"])
-                lon = float(r["lon"])
-                # Prefer a clean settlement name from address details if present
-                addr = r.get("address", {})
-                clean = (addr.get("city") or addr.get("town") or addr.get("village")
-                         or addr.get("hamlet") or addr.get("suburb") or addr.get("county"))
-                display = clean or r.get("display_name", name)
-                logger.info("Geocoded '%s' -> %s (%s/%s)", name, display, r_class, r_type)
-                return lat, lon, display
+                try:
+                    lat = float(r["lat"])
+                    lon = float(r["lon"])
+                except Exception:
+                    continue
+                accepted.append({
+                    "raw": r,
+                    "lat": lat,
+                    "lon": lon,
+                    "importance": float(r.get("importance") or 0),
+                })
+
+        if accepted:
+            # Tier 1: two or more genuine named settlements (town/village/suburb/etc.)
+            # in different counties are always ambiguous, no matter how much bigger
+            # one is than the other — e.g. Blackrock, Co. Dublin vs Blackrock, Co.
+            # Cork are both real places; we shouldn't silently pick the bigger one.
+            settlement_counties = []
+            seen_settlement_counties = set()
+            for c in accepted:
+                r = c["raw"]
+                if (r.get("class") or "").lower() == "place" and (r.get("type") or "").lower() in SETTLEMENT_TYPES:
+                    county = r.get("address", {}).get("county") or r.get("address", {}).get("state")
+                    if county and county not in seen_settlement_counties:
+                        seen_settlement_counties.add(county)
+                        settlement_counties.append(county)
+            if len(settlement_counties) > 1:
+                logger.info("Geocode ambiguous '%s' across settlement counties: %s", name, settlement_counties)
+                return None, None, name, sorted(settlement_counties)
+
+            # Tier 2: fallback for names with no distinct settlement match at all
+            # (e.g. "Glebe", which only resolves to electoral-division boundaries) —
+            # flag ambiguity when multiple counties are tied at the top importance band.
+            top_importance = max(c["importance"] for c in accepted)
+            top_tier = [c for c in accepted if c["importance"] >= top_importance - AMBIGUITY_IMPORTANCE_MARGIN]
+            counties = []
+            seen_counties = set()
+            for c in top_tier:
+                county = (c["raw"].get("address", {}).get("county")
+                          or c["raw"].get("address", {}).get("state"))
+                if county and county not in seen_counties:
+                    seen_counties.add(county)
+                    counties.append(county)
+            if len(counties) > 1:
+                logger.info("Geocode ambiguous '%s' across counties: %s", name, counties)
+                return None, None, name, sorted(counties)
+
+            # Once we know it's not ambiguous, prefer a genuine settlement match
+            # (town/village/etc.) over a same-county administrative/civil-parish
+            # boundary, even if the boundary entry scores higher on importance —
+            # otherwise a real, well-known village can lose to an obscure legal
+            # boundary that happens to be better-tagged in OSM (e.g. "Kilmore"
+            # was resolving to a County Cavan civil parish instead of the
+            # well-known Kilmore Quay village in County Wexford).
+            settlement_matches = [
+                sc for sc in accepted
+                if (sc["raw"].get("class") or "").lower() == "place"
+                and (sc["raw"].get("type") or "").lower() in SETTLEMENT_TYPES
+            ]
+            c = max(settlement_matches, key=lambda sc: sc["importance"]) if settlement_matches else accepted[0]
+            r, lat, lon = c["raw"], c["lat"], c["lon"]
+            # Prefer a clean settlement name from address details if present
+            addr = r.get("address", {})
+            clean = (addr.get("city") or addr.get("town") or addr.get("village")
+                     or addr.get("hamlet") or addr.get("suburb") or addr.get("county"))
+            display = clean or r.get("display_name", name)
+            logger.info("Geocoded '%s' -> %s (%s/%s)", name, display, r.get("class"), r.get("type"))
+            return lat, lon, display, None
 
         # Fallback: if the query itself already looks like a resolved place name
         # (contains a comma, e.g. "Dublin, Leinster, Ireland" reused from a
@@ -353,13 +432,13 @@ def geocode_location(name: str):
                          or addr.get("hamlet") or addr.get("suburb") or addr.get("county")
                          or r.get("display_name", name))
                 logger.info("Geocoded (fallback) '%s' -> %s", name, clean)
-                return lat, lon, clean
+                return lat, lon, clean, None
 
         # Nothing acceptable found (e.g. only a business matched)
         logger.info("Geocode rejected '%s' — no settlement match in Ireland", name)
     except Exception as e:
         logger.error("LocationIQ error for '%s': %s", name, e)
-    return None, None, name
+    return None, None, name, None
 
 
 def reverse_geocode(lat, lon):
@@ -547,6 +626,20 @@ def warnings_for(warnings, location_name, date_iso):
 
 # ─── Advice generation ────────────────────────────────────────────────────────
 
+# Kept deliberately narrow and literal — matched in code, not left to the LLM's
+# judgment, so a profile like "allergies from mice" or "allergic to rice" can't
+# get associatively linked to pollen the way a free-text prompt instruction can.
+POLLEN_CONDITION_KEYWORDS = (
+    "asthma", "hay fever", "hayfever", "pollen", "flower dust",
+    "allergic rhinitis", "rhinitis", "spore",
+)
+
+
+def _profile_mentions_pollen_condition(user_ctx):
+    ctx_lower = user_ctx.lower()
+    return any(kw in ctx_lower for kw in POLLEN_CONDITION_KEYWORDS)
+
+
 def generate_advice(forecasts, activities, user_text, history, query_type):
     user_ctx = session.get("user_context", "").strip()
     intro = f"User profile: {user_ctx}\n\n" if user_ctx else ""
@@ -556,15 +649,12 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
         loc = f.get("location", "N/A")
         date = f.get("date", "N/A")
         fc = f.get("forecast", {})
-        def c2f(c):
-            return round(c * 9 / 5 + 32) if c is not None else None
         tmin, tmax = fc.get("temp_min"), fc.get("temp_max")
-        tmin_f, tmax_f = c2f(tmin), c2f(tmax)
         wind_ms = fc.get('wind_avg')
         wind_kmh = round(wind_ms * 3.6) if wind_ms is not None else None
         lines.append(
             f"Location: {loc}, Date: {date} | "
-            f"Temp: {tmin}-{tmax}°C ({tmin_f}-{tmax_f}°F) | "
+            f"Temp: {tmin}-{tmax}°C | "
             f"Rain: {fc.get('rain_total')}mm ({fc.get('rain_prob_avg')}% chance) | "
             f"Wind: {wind_ms} m/s ({wind_kmh} km/h) | Humidity: {fc.get('humidity_avg')}%"
         )
@@ -600,11 +690,28 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
         length_note = ("Give a thorough, friendly answer with practical detail on what to wear, "
                        "activity suitability, and any risks.\n")
 
+    pollen_note = (
+        "The weather data below does NOT include pollen or hay fever information — Met Éireann's "
+        "forecast API has no pollen data. Never invent or estimate a pollen forecast, pollen count, "
+        "or pollen type under any circumstance. If — and only if — the user's message above asks "
+        "about pollen, hay fever, or allergens directly, tell them you don't have live pollen data "
+        "and point them to https://www.met.ie/forecasts/pollen (which also shows which pollen types "
+        "are currently in the air). If they didn't ask about pollen, don't bring it up at all — this "
+        "applies regardless of anything else in their profile.\n"
+    )
+    if _profile_mentions_pollen_condition(user_ctx):
+        pollen_note += (
+            "Their profile above does mention a pollen-related condition (asthma/hay fever/pollen "
+            "allergy), so even though this message doesn't ask about pollen, briefly mention as a "
+            "relevant aside that they can check https://www.met.ie/forecasts/pollen for the latest "
+            "pollen forecast — keep it short, one sentence, don't dwell on it.\n"
+        )
+
     prompt = f"""{intro}You are MetGPT, a helpful Irish weather assistant. Today is {today_str}.
 When mentioning any date, calculate the correct day of the week from the date string in the data — do not guess. This query is classified as "{query_type}".
-Always give temperatures in both Celsius and Fahrenheit, e.g. "around 19°C (66°F)".
+Always give temperatures in Celsius only, e.g. "around 19°C". Never mention Fahrenheit.
 Always give wind speed in both m/s and km/h, e.g. "around 4 m/s (14 km/h)".
-{length_note}{range_note}
+{pollen_note}{length_note}{range_note}
 User asked: {user_text}
 
 Weather data:
@@ -670,9 +777,16 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
     valid_locs = []
     had_explicit_location = len(explicit_locs) > 0
     for e in explicit_locs:
-        lat, lon, _ = geocode_location(e["location"])
+        lat, lon, _, ambiguous_counties = geocode_location(e["location"])
         if lat is not None:
             valid_locs.append({"location": e["location"], "date": e["date"]})
+        elif ambiguous_counties:
+            responses.append({
+                "type": "error",
+                "text": (f"There's more than one '{e['location']}' in Ireland — I found it in "
+                         f"{', '.join(ambiguous_counties)}. Could you say which county you mean? "
+                         f"(e.g. \"{e['location']}, {ambiguous_counties[0]}\")"),
+            })
         else:
             responses.append({
                 "type": "error",
@@ -748,10 +862,17 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
             lon = session["user_home_lon"]
             display_name = session.get("user_home_display", loc_name)
         else:
-            lat, lon, display_name = geocode_location(loc_name)
+            lat, lon, display_name, ambiguous_counties = geocode_location(loc_name)
 
         if lat is None:
-            responses.append({"type": "error", "text": f"I couldn't find '{loc_name}' in Ireland."})
+            if ambiguous_counties:
+                responses.append({
+                    "type": "error",
+                    "text": (f"There's more than one '{loc_name}' in Ireland — I found it in "
+                             f"{', '.join(ambiguous_counties)}. Could you say which county you mean?"),
+                })
+            else:
+                responses.append({"type": "error", "text": f"I couldn't find '{loc_name}' in Ireland."})
             continue
 
         for w in warnings_for(_warnings_cache, display_name, date_iso):
@@ -893,12 +1014,16 @@ def settings():
         session["answer_length"] = answer_length
 
     if home:
-        lat, lon, display = geocode_location(home)
+        lat, lon, display, ambiguous_counties = geocode_location(home)
         if lat:
             session["user_home_location"] = home
             session["user_home_lat"] = lat
             session["user_home_lon"] = lon
             session["user_home_display"] = display
+        elif ambiguous_counties:
+            return jsonify({"error": (f"There's more than one '{home}' in Ireland — found in "
+                                       f"{', '.join(ambiguous_counties)}. Try adding the county, "
+                                       f"e.g. \"{home}, {ambiguous_counties[0]}\".")}), 400
         else:
             return jsonify({"error": f"Could not find '{home}' in Ireland. Try a different spelling."}), 400
 

@@ -314,26 +314,24 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,
 
 /* Uniform blue metric tiles (clean, Met Éireann style) */
 .fc-metric--tempc,
-.fc-metric--tempf,
 .fc-metric--rain,
 .fc-metric--chance,
 .fc-metric--wind,
 .fc-metric--humidity { background: var(--gray-50); border-left-color: var(--blue); }
 
 .fc-metric--tempc .fc-metric-label,
-.fc-metric--tempf .fc-metric-label,
 .fc-metric--rain .fc-metric-label,
 .fc-metric--chance .fc-metric-label,
 .fc-metric--wind .fc-metric-label,
 .fc-metric--humidity .fc-metric-label { color: var(--gray-400); }
 
 .fc-metric--tempc .fc-metric-value,
-.fc-metric--tempf .fc-metric-value,
 .fc-metric--rain .fc-metric-value,
 .fc-metric--chance .fc-metric-value,
 .fc-metric--wind .fc-metric-value,
 .fc-metric--humidity .fc-metric-value { color: var(--blue); }
 
+.fc-metric--tempc { grid-column: 1 / -1; }
 .fc-metric--wind { grid-column: 1 / -1; }
 .fc-metric--wind .fc-metric-value { font-size: 14px; }
 
@@ -546,4 +544,3 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,
   text-align: right;
   color: var(--gray-900);
 }
-.fc-row-f { font-size: 11px; color: var(--blue); font-weight: 600; opacity: 0.85; }

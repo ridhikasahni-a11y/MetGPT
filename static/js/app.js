@@ -197,12 +197,6 @@ function weatherIcon(r) {
   return sun;
 }
 
-// Convert Celsius to Fahrenheit, formatted
-function toF(c) {
-  if (c == null) return null;
-  return Math.round(c * 9 / 5 + 32);
-}
-
 // Format wind in m/s, km/h and mph
 function windStr(ms) {
   if (ms == null) return 'N/A';
@@ -217,9 +211,6 @@ function windShort(ms) {
 }
 
 function buildForecastCard(r) {
-  const tempStr = (r.temp_min != null && r.temp_max != null)
-    ? `${r.temp_min}–${r.temp_max}°C (${toF(r.temp_min)}–${toF(r.temp_max)}°F)`
-    : 'N/A';
   const rainStr = r.rain_total != null ? `${r.rain_total} mm` : 'N/A';
   const probStr = r.rain_prob != null ? `${Math.round(r.rain_prob)}%` : 'N/A';
   const windDisp = r.wind_avg != null ? windShort(r.wind_avg) : 'N/A';
@@ -235,7 +226,7 @@ function buildForecastCard(r) {
       dayName = d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
     } catch (e) {}
     const tCompact = (r.temp_min != null && r.temp_max != null)
-      ? `${r.temp_min}–${r.temp_max}°C<br><span class="fc-row-f">${toF(r.temp_min)}–${toF(r.temp_max)}°F</span>`
+      ? `${r.temp_min}–${r.temp_max}°C`
       : 'N/A';
     row.innerHTML = `
       <span class="fc-row-day">${dayName}</span>
@@ -247,11 +238,9 @@ function buildForecastCard(r) {
 
   // Full card for single-day view
   const cRange = (r.temp_min != null && r.temp_max != null) ? `${r.temp_min}–${r.temp_max}°` : 'N/A';
-  const fRange = (r.temp_min != null && r.temp_max != null) ? `${toF(r.temp_min)}–${toF(r.temp_max)}°` : 'N/A';
 
   const ic = {
     tempc: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 14.76V4a2 2 0 0 0-4 0v10.76a4 4 0 1 0 4 0z"/></svg>',
-    tempf: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 14.76V4a2 2 0 0 0-4 0v10.76a4 4 0 1 0 4 0z"/></svg>',
     rain:  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>',
     chance:'<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="15" x2="12" y2="23"/><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>',
     wind:  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg>',
@@ -271,7 +260,6 @@ function buildForecastCard(r) {
     </div>
     <div class="fc-metrics">
       <div class="fc-metric fc-metric--tempc"><span class="fc-metric-label">${ic.tempc} Temp °C</span><span class="fc-metric-value">${cRange}</span></div>
-      <div class="fc-metric fc-metric--tempf"><span class="fc-metric-label">${ic.tempf} Temp °F</span><span class="fc-metric-value">${fRange}</span></div>
       <div class="fc-metric fc-metric--rain"><span class="fc-metric-label">${ic.rain} Rain total</span><span class="fc-metric-value">${rainStr}</span></div>
       <div class="fc-metric fc-metric--chance"><span class="fc-metric-label">${ic.chance} Rain chance</span><span class="fc-metric-value">${probStr}</span></div>
       <div class="fc-metric fc-metric--wind"><span class="fc-metric-label">${ic.wind} Wind avg</span><span class="fc-metric-value">${windDisp}</span></div>
@@ -290,7 +278,7 @@ function buildHourlyTable(hourly) {
   const usable = hourly.filter(h => h.temperature != null);
   if (usable.length === 0) return '<p style="font-size:12px;color:#888;padding:6px">No hourly data.</p>';
   const rows = usable.map(h => {
-    const temp  = h.temperature  != null ? `${h.temperature}°C / ${toF(h.temperature)}°F` : '—';
+    const temp  = h.temperature  != null ? `${h.temperature}°C` : '—';
     const rain  = h.rain_mm      != null ? `${h.rain_mm}mm`        : '—';
     const prob  = h.rain_prob    != null ? `${Math.round(h.rain_prob)}%` : '—';
     const wind  = h.wind         != null ? `${h.wind}m/s (${Math.round(h.wind*3.6)}km/h)` : '—';
