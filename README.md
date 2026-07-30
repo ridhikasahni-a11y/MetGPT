@@ -1,6 +1,6 @@
 # MetGPT — AI-Powered Irish Weather Assistant
 
-MetGPT is a conversational weather assistant for Ireland. It combines Google's **Gemini 2.5 Flash Lite** language model with **official Met Éireann forecast data** to answer natural-language weather questions — while guaranteeing that no forecast is ever hallucinated. Every number MetGPT gives comes directly from Met Éireann; the LLM only interprets and explains that real data.
+MetGPT is a conversational weather assistant for Ireland. It combines Google's **Gemini 2.5 Flash Lite** language model with **official Met Éireann forecast data** to answer natural-language weather questions. Every number MetGPT gives comes directly from Met Éireann; the LLM only interprets and explains that real data.
 
 ---
 
@@ -23,10 +23,10 @@ MetGPT is a conversational weather assistant for Ireland. It combines Google's *
 | Layer | Technology |
 |-------|-----------|
 | Backend / web framework | **Flask** (Python) |
-| Language model | **Gemini 2.5 Flash Lite** (Google Generative AI) |
-| Weather data | **Met Éireann Open API** (forecasts) |
-| Geocoding | **LocationIQ** (forward + reverse) |
-| Frontend | HTML, CSS, vanilla JavaScript |
+| Language model | **Gemini 2.5 Flash Lite**  |
+| Weather data | **Met Éireann Open API**  |
+| Geocoding | **LocationIQ**  |
+| Frontend | HTML, CSS, JavaScript |
 | Session storage | Flask-Session (filesystem) |
 
 ---
@@ -57,29 +57,10 @@ fetch_warnings()          → active alerts                   (Met Éireann RSS)
 generate_advice()         → interpret real data → advice    (Gemini)
     │
     ▼
-JSON response → rendered as forecast cards + advice bubble
+JSON response
 ```
 
 The orchestration lives in `process_query()` in `app.py`.
-
----
-
-## Project Structure
-
-```
-metgpt/
-├── app.py                 # Flask app: routes, auth, LLM pipeline, weather logic
-├── requirements.txt       # Python dependencies
-├── .env                   # API keys & user accounts
-├── templates/
-│   ├── index.html         # Main chat interface
-│   └── login.html         # Login page
-└── static/
-    ├── css/
-    │   └── style.css      # Styling
-    └── js/
-        └── app.js         # Frontend logic (chat, settings, geolocation)
-```
 
 ---
 
@@ -96,7 +77,7 @@ metgpt/
 ```bash
 cd metgpt
 python3 -m venv venv
-source venv/bin/activate        # On Windows: venv\Scripts\activate
+source venv/bin/activate        
 ```
 
 ### 3. Install dependencies
@@ -169,7 +150,3 @@ When deploying (e.g. Railway, Render):
 - The "Use my location" GPS feature requires **HTTPS** (or localhost). Hosted platforms provide HTTPS by default.
 
 ---
-
-## License
-
-This project was developed for academic/dissertation purposes. Weather data is provided by Met Éireann under their open data terms.
