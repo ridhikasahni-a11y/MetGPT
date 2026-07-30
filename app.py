@@ -362,6 +362,29 @@ def geocode_location(name: str):
                 })
 
         if accepted:
+            # If the caller's own text already names one of the candidate
+            # counties (e.g. "Newcastle, County Dublin" answering an earlier
+            # disambiguation prompt), trust it instead of re-asking — filter
+            # down to that county before running the ambiguity checks below.
+            # LocationIQ's search doesn't strictly filter by every word in
+            # the query, so other counties' matches (Tipperary, Wicklow) can
+            # still come back even when the county was explicitly given.
+            name_lower = name.lower()
+            candidate_counties = set()
+            for c in accepted:
+                county = (c["raw"].get("address", {}).get("county")
+                          or c["raw"].get("address", {}).get("state"))
+                if county:
+                    candidate_counties.add(county)
+            named_counties = [co for co in candidate_counties if co.lower() in name_lower]
+            if len(named_counties) == 1:
+                chosen_county = named_counties[0]
+                accepted = [
+                    c for c in accepted
+                    if (c["raw"].get("address", {}).get("county")
+                        or c["raw"].get("address", {}).get("state")) == chosen_county
+                ]
+
             # Tier 1: two or more genuine named settlements (town/village/suburb/etc.)
             # in different counties are always ambiguous, no matter how much bigger
             # one is than the other — e.g. Blackrock, Co. Dublin vs Blackrock, Co.
@@ -774,20 +797,42 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
     multi_day_request = len(date_only) > 1
 
     # 3) Geocode any explicitly-typed locations
+    # A multi-day request (e.g. "this weekend") can produce several candidates
+    # that share the same location name, one per date. Geocoding — and any
+    # resulting error message — depends only on the name, not the date, so we
+    # resolve and report each distinct name once and reuse the result across
+    # every date that shares it, instead of geocoding and messaging per-date.
     valid_locs = []
     had_explicit_location = len(explicit_locs) > 0
+    geocode_results = {}
+    reported_locs = set()
     for e in explicit_locs:
-        lat, lon, _, ambiguous_counties = geocode_location(e["location"])
+        loc_key = e["location"].lower()
+        if loc_key not in geocode_results:
+            geocode_results[loc_key] = geocode_location(e["location"])
+        lat, lon, _, ambiguous_counties = geocode_results[loc_key]
         if lat is not None:
             valid_locs.append({"location": e["location"], "date": e["date"]})
+        elif loc_key in reported_locs:
+            continue
         elif ambiguous_counties:
+            reported_locs.add(loc_key)
             responses.append({
                 "type": "error",
                 "text": (f"There's more than one '{e['location']}' in Ireland — I found it in "
                          f"{', '.join(ambiguous_counties)}. Could you say which county you mean? "
                          f"(e.g. \"{e['location']}, {ambiguous_counties[0]}\")"),
             })
+            # Remember every date that was requested for this ambiguous name
+            # (e.g. all 7 days of "Newcastle for the coming 7 days") so that
+            # once the user disambiguates it in a later message ("Newcastle,
+            # County Dublin") without repeating the date range, we can restore
+            # it instead of silently collapsing to just today.
+            pending_dates = sorted({x["date"] for x in explicit_locs if x["location"].lower() == loc_key})
+            if len(pending_dates) > 1:
+                session["pending_ambiguous_dates"] = {"base": loc_key, "dates": pending_dates}
         else:
+            reported_locs.add(loc_key)
             responses.append({
                 "type": "error",
                 "text": (f"I couldn't find '{e['location']}' in Ireland. I'm an Irish weather "
@@ -798,6 +843,18 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
     # locations, stop here. Don't silently fall back to their home location.
     if had_explicit_location and not valid_locs:
         return responses, prev_locs or [], prev_dates or []
+
+    # 3b) Restore a pending multi-day range once an ambiguous place from an
+    # earlier message gets disambiguated (e.g. "Newcastle, County Dublin"
+    # replying to the Newcastle prompt above). Only applies when this message
+    # resolved to exactly one place and didn't specify its own date range —
+    # if it did, that explicit request takes priority instead.
+    pending = session.pop("pending_ambiguous_dates", None)
+    if pending and len(explicit_locs) == 1 and len(valid_locs) == 1 \
+            and pending["base"] in valid_locs[0]["location"].lower():
+        resolved_loc = valid_locs[0]["location"]
+        valid_locs = [{"location": resolved_loc, "date": d} for d in pending["dates"]]
+        responses.append({"type": "info", "text": f"Showing {len(pending['dates'])} days for {resolved_loc}"})
 
     # 4) Follow-up reuse — only when NOT a multi-day range request
     if not valid_locs and query_type == "followup" and prev_locs and not multi_day_request:

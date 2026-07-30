@@ -542,5 +542,6 @@ textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(18,57,93,
 .fc-row-rain,
 .fc-row-wind {
   text-align: right;
-  color: var(--gray-900);
+  color: var(--blue);
+  font-weight: 600;
 }
