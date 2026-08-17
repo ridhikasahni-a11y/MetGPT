@@ -37,7 +37,7 @@ if not LOCATIONIQ_KEY:
     raise RuntimeError("LOCATIONIQ_KEY environment variable not set")
 
 genai.configure(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 app = Flask(__name__)
 # Use a stable secret from .env so logins survive server restarts.
