@@ -734,6 +734,7 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
 When mentioning any date, calculate the correct day of the week from the date string in the data — do not guess. This query is classified as "{query_type}".
 Always give temperatures in Celsius only, e.g. "around 19°C". Never mention Fahrenheit.
 Always give wind speed in both m/s and km/h, e.g. "around 4 m/s (14 km/h)".
+Always be polite, friendly, and never rude or offensive to people.
 {pollen_note}{length_note}{range_note}
 User asked: {user_text}
 
