@@ -15,7 +15,7 @@ connection.allowed_gai_family = allowed_gai_family
 
 import os, json, re, logging, secrets, threading, xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from functools import lru_cache, wraps
+from functools import wraps
 from time import time
 
 import requests
@@ -105,7 +105,10 @@ def login_required(func):
     return wrapper
 
 # Global caches
-_cached_locations = {}
+# Forecasts expire after an hour so a long-running server never serves a
+# stale forecast (a plain dict here kept forecasts until the next restart).
+FORECAST_CACHE_TTL = 3600
+_cached_locations = TTLCache(maxsize=256, ttl=FORECAST_CACHE_TTL)
 _warnings_cache = None
 _warnings_last_fetched = None
 
@@ -504,7 +507,8 @@ def get_ip_location():
 
 # ─── Met Éireann forecast ─────────────────────────────────────────────────────
 
-@lru_cache(maxsize=128)
+# Not cached here: results are cached in _cached_locations (with a TTL), and
+# only successful fetches are stored, so a temporary API failure isn't kept.
 def fetch_forecast(lat, lon):
     url = f"http://openaccess.pf.api.met.ie/metno-wdb2ts/locationforecast?lat={lat};long={lon}"
     try:

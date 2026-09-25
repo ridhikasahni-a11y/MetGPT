@@ -380,9 +380,20 @@ function useMyLocation() {
     },
     err => {
       status.style.color = '#FF9B9B';
-      status.textContent = 'Could not get GPS location. Please type a location above instead.';
+      let reason = 'Could not get your location';
+      if (err.code === err.PERMISSION_DENIED) {
+        reason = 'Location access is blocked for this site (check your browser and system location settings)';
+      } else if (err.code === err.POSITION_UNAVAILABLE) {
+        reason = 'Your device could not work out its location';
+      } else if (err.code === err.TIMEOUT) {
+        reason = 'Finding your location took too long';
+      }
+      status.textContent = reason + '. Please type a location above instead.';
+      console.warn('Geolocation error', err.code, err.message);
     },
-    { enableHighAccuracy: true, timeout: 10000 }
+    // Desktops (e.g. a Mac mini) have no GPS and locate via Wi-Fi, so don't
+    // insist on high accuracy, allow more time, and accept a recent fix.
+    { enableHighAccuracy: false, timeout: 20000, maximumAge: 600000 }
   );
 }
 
