@@ -201,33 +201,17 @@ function weatherIcon(r) {
   return sun;
 }
 
-// Wind formatters. The server has already rounded these (whole m/s, km/h and
-// mph to the nearest 5), so nothing is re-derived here — re-deriving would
-// reintroduce the false precision we just removed.
-function windStr(r) {
-  if (r == null || r.wind_ms == null) return 'N/A';
-  return `${r.wind_ms} m/s · ${r.wind_kmh} km/h · ${r.wind_mph} mph`;
-}
-function windShort(r) {
-  if (r == null || r.wind_ms == null) return '—';
-  return `${r.wind_ms} m/s (${r.wind_kmh} km/h)`;
-}
-
-// Min-max temperature range in whole degrees, collapsed when the two match
-// (rounding often makes them equal, and "12–12°C" reads badly).
-function tempRange(r, unit) {
-  const a = r.temp_min, b = r.temp_max;
-  if (a == null && b == null) return 'N/A';
-  if (a == null) return `${b}${unit}`;
-  if (b == null) return `${a}${unit}`;
-  return a === b ? `${a}${unit}` : `${a}–${b}${unit}`;
-}
+// The server builds every display string: it rounds each figure to a step the
+// forecast can support and converts it into the user's chosen units. The
+// client only prints what it is handed, so nothing can reintroduce precision
+// or disagree with the wording in the advice bubble.
 
 function buildForecastCard(r) {
   const rainStr = r.rain_text != null ? r.rain_text : 'N/A';
   const probStr = r.rain_prob_text != null ? r.rain_prob_text : 'N/A';
-  const windDisp = r.wind_ms != null ? windShort(r) : 'N/A';
+  const windDisp = r.wind_text != null ? r.wind_text : 'N/A';
   const humStr  = r.humidity != null ? `${r.humidity}%` : 'N/A';
+  const tempStr = r.temp_text != null ? r.temp_text : 'N/A';
 
   // Compact row for multi-day (week) view
   if (r.compact) {
@@ -238,17 +222,15 @@ function buildForecastCard(r) {
       const d = new Date(r.date + 'T00:00:00');
       dayName = d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' });
     } catch (e) {}
-    const tCompact = tempRange(r, '°C');
     row.innerHTML = `
       <span class="fc-row-day">${dayName}</span>
-      <span class="fc-row-temp">${tCompact}</span>
+      <span class="fc-row-temp">${tempStr}</span>
       <span class="fc-row-rain">${rainStr} · ${probStr}</span>
       <span class="fc-row-wind">${windDisp}</span>`;
     return row;
   }
 
   // Full card for single-day view
-  const cRange = tempRange(r, '°');
 
   const ic = {
     tempc: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 14.76V4a2 2 0 0 0-4 0v10.76a4 4 0 1 0 4 0z"/></svg>',
@@ -270,7 +252,7 @@ function buildForecastCard(r) {
       <span class="fc-date">${escHtml(r.date)}</span>
     </div>
     <div class="fc-metrics">
-      <div class="fc-metric fc-metric--tempc"><span class="fc-metric-label">${ic.tempc} Temp °C</span><span class="fc-metric-value">${cRange}</span></div>
+      <div class="fc-metric fc-metric--tempc"><span class="fc-metric-label">${ic.tempc} Temp</span><span class="fc-metric-value">${tempStr}</span></div>
       <div class="fc-metric fc-metric--rain"><span class="fc-metric-label">${ic.rain} Rain total</span><span class="fc-metric-value">${rainStr}</span></div>
       <div class="fc-metric fc-metric--chance"><span class="fc-metric-label">${ic.chance} Rain chance</span><span class="fc-metric-value">${probStr}</span></div>
       <div class="fc-metric fc-metric--wind"><span class="fc-metric-label">${ic.wind} Wind avg</span><span class="fc-metric-value">${windDisp}</span></div>
@@ -289,10 +271,10 @@ function buildHourlyTable(hourly) {
   const usable = hourly.filter(h => h.temperature != null);
   if (usable.length === 0) return '<p style="font-size:12px;color:#888;padding:6px">No hourly data.</p>';
   const rows = usable.map(h => {
-    const temp  = h.temperature    != null ? `${h.temperature}°C` : '—';
+    const temp  = h.temp_text      != null ? h.temp_text : '—';
     const rain  = h.rain_text      != null ? h.rain_text : '—';
     const prob  = h.rain_prob_text != null ? h.rain_prob_text : '—';
-    const wind  = h.wind_ms        != null ? `${h.wind_ms} m/s (${h.wind_kmh} km/h)` : '—';
+    const wind  = h.wind_text      != null ? h.wind_text : '—';
     const dir   = h.wind_direction || '—';
     const cloud = h.cloudiness     != null ? `${h.cloudiness}%` : '—';
     return `<tr>
@@ -325,22 +307,84 @@ function renderMarkdown(str) {
     .replace(/\n/g, '<br>');
 }
 
-// Answer length preference (short | detailed)
-let answerLength = (window.__ANSWER_LENGTH__ || 'detailed');
+// ─── Settings state ──────────────────────────────────────────────────────────
+// Server-rendered preferences for the logged-in user. These are stored per
+// user, so they follow the person rather than the browser.
+const S = window.__SETTINGS__ || {};
+let answerLength = S.answer_length || 'detailed';
+let tempUnit     = S.temp_unit     || 'c';
+let rainUnit     = S.rain_unit     || 'mm';
+let windUnits    = Array.isArray(S.wind_units) && S.wind_units.length ? S.wind_units.slice() : ['kmh','ms'];
+let hasHome      = !!S.has_home;
+
+const WIND_ORDER = ['kmh','ms','mph','kn','bft'];
 
 function setAnswerLength(val, save) {
   answerLength = val;
-  document.querySelectorAll('.len-opt').forEach(b => {
-    b.classList.toggle('active', b.dataset.len === val);
-  });
+  syncToggle('.seg-opt[data-len]', 'len', val);
   if (save) saveSettings(true);
 }
+function setTempUnit(val, save) {
+  tempUnit = val;
+  syncToggle('.seg-opt[data-temp]', 'temp', val);
+  if (save) saveSettings(true);
+}
+function setRainUnit(val, save) {
+  rainUnit = val;
+  syncToggle('.seg-opt[data-rain]', 'rain', val);
+  if (save) saveSettings(true);
+}
+function syncToggle(selector, key, val) {
+  document.querySelectorAll(selector).forEach(b => {
+    b.classList.toggle('active', b.dataset[key] === val);
+  });
+}
 
-// Sidebar toggle — drawer on mobile, collapse on desktop
+// Wind units are multi-select, but never allowed to reach zero — with none
+// ticked there would be no wind figure to show at all.
+function toggleWindUnit(unit) {
+  const i = windUnits.indexOf(unit);
+  if (i >= 0) {
+    if (windUnits.length === 1) { flashSaveStatus('Keep at least one wind unit.', true); return; }
+    windUnits.splice(i, 1);
+  } else {
+    windUnits.push(unit);
+  }
+  windUnits = WIND_ORDER.filter(u => windUnits.indexOf(u) >= 0);
+  syncWindChips();
+  saveSettings(true);
+}
+function syncWindChips() {
+  document.querySelectorAll('.unit-chip[data-wind]').forEach(b => {
+    b.setAttribute('aria-pressed', windUnits.indexOf(b.dataset.wind) >= 0 ? 'true' : 'false');
+  });
+}
+
+function flashSaveStatus(msg, isError) {
+  const status = document.getElementById('save-status');
+  if (!status) return;
+  status.style.color = isError ? '#FF9B9B' : '#7FE3A8';
+  status.textContent = msg;
+  setTimeout(() => { status.textContent = ''; }, 2500);
+}
+
+// ─── Preferences panel (hamburger) ───────────────────────────────────────────
+// Collapsed by default. The choice is pure UI chrome, so it lives in
+// localStorage rather than being round-tripped to the server.
+const PANEL_KEY = 'metgpt.panelOpen';
+
+function panelStored() {
+  try { return localStorage.getItem(PANEL_KEY) === 'open'; } catch (e) { return false; }
+}
+function panelStore(open) {
+  try { localStorage.setItem(PANEL_KEY, open ? 'open' : 'closed'); } catch (e) {}
+}
+function isMobile() { return window.matchMedia('(max-width: 760px)').matches; }
+
 function toggleSidebar() {
   const layout = document.querySelector('.layout');
-  if (window.matchMedia('(max-width: 760px)').matches) {
-    layout.classList.toggle('sidebar-open');
+  if (isMobile()) {
+    const open = layout.classList.toggle('sidebar-open');
     let overlay = document.querySelector('.sidebar-overlay');
     if (!overlay) {
       overlay = document.createElement('div');
@@ -348,25 +392,188 @@ function toggleSidebar() {
       overlay.addEventListener('click', () => {
         layout.classList.remove('sidebar-open');
         overlay.classList.remove('open');
+        panelStore(false);
       });
       document.body.appendChild(overlay);
     }
-    overlay.classList.toggle('open', layout.classList.contains('sidebar-open'));
+    overlay.classList.toggle('open', open);
+    panelStore(open);
   } else {
-    layout.classList.toggle('sidebar-collapsed');
+    const open = !layout.classList.toggle('sidebar-collapsed');
+    panelStore(open);
   }
 }
 
-// Browser geolocation → reverse-geocode → set home location
-function useMyLocation() {
-  const status = document.getElementById('save-status');
+// Closes the panel from inside it. On mobile the open drawer covers the
+// hamburger, so tapping where the hamburger appears to be just hits the
+// drawer — there has to be a close control within the drawer itself.
+function closeSidebar() {
+  const layout = document.querySelector('.layout');
+  layout.classList.remove('sidebar-open');
+  const overlay = document.querySelector('.sidebar-overlay');
+  if (overlay) overlay.classList.remove('open');
+  if (!isMobile()) layout.classList.add('sidebar-collapsed');
+  panelStore(false);
+}
+
+function applyStoredPanelState() {
+  const layout = document.querySelector('.layout');
+  // On mobile a drawer that opens itself on load is jarring, so the remembered
+  // state only re-opens the panel on desktop.
+  if (isMobile()) {
+    layout.classList.remove('sidebar-collapsed');
+  } else {
+    layout.classList.remove('sidebar-open');
+    const overlay = document.querySelector('.sidebar-overlay');
+    if (overlay) overlay.classList.remove('open');
+    layout.classList.toggle('sidebar-collapsed', !panelStored());
+  }
+}
+
+// Only re-apply when the layout actually crosses the breakpoint, so a drawer
+// the user has open doesn't slam shut when the on-screen keyboard resizes.
+let wasMobile = null;
+function onViewportChange() {
+  const now = isMobile();
+  if (now !== wasMobile) { wasMobile = now; applyStoredPanelState(); }
+}
+
+// ─── Location chip and popover ───────────────────────────────────────────────
+function setHomeDisplay(name) {
+  hasHome = !!name;
+  const chip = document.getElementById('loc-chip');
+  const text = document.getElementById('loc-chip-text');
+  if (!chip || !text) return;
+  // Keep the chip short: "Galway, Co. Galway" becomes "Galway".
+  text.textContent = name ? String(name).split(',')[0].trim() : 'Set location';
+  chip.classList.toggle('unset', !name);
+  chip.title = name ? ('Home location: ' + name) : 'No home location set yet';
+}
+
+function toggleLocPop(e) {
+  if (e) e.stopPropagation();
+  const pop = document.getElementById('loc-pop');
+  pop.classList.contains('open') ? closeLocPop() : openLocPop();
+}
+
+function openLocPop() {
+  const pop  = document.getElementById('loc-pop');
+  const chip = document.getElementById('loc-chip');
+  document.getElementById('loc-pop-backdrop').classList.add('open');
+  pop.classList.add('open');
+  // Anchor under the chip on desktop; the mobile CSS pins it full-width instead.
+  if (!isMobile()) {
+    const main = pop.offsetParent || document.querySelector('.main');
+    const cr = chip.getBoundingClientRect();
+    const mr = main.getBoundingClientRect();
+    let left = cr.right - mr.left - pop.offsetWidth;
+    if (left < 8) left = 8;
+    pop.style.left = left + 'px';
+    pop.style.top  = (cr.bottom - mr.top + 8) + 'px';
+  }
+  const inp = document.getElementById('home-input');
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+function closeLocPop() {
+  document.getElementById('loc-pop').classList.remove('open');
+  document.getElementById('loc-pop-backdrop').classList.remove('open');
+  const st = document.getElementById('loc-pop-status');
+  if (st) st.textContent = '';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('loc-pop').classList.contains('open')) {
+    closeLocPop();
+  } else if (document.querySelector('.layout').classList.contains('sidebar-open')) {
+    closeSidebar();
+  }
+});
+
+function saveHomeLocation() {
+  const inp = document.getElementById('home-input');
+  const status = document.getElementById('loc-pop-status');
+  const home = inp ? inp.value.trim() : '';
+  if (!home) { status.style.color = '#C0392B'; status.textContent = 'Type a location first.'; return; }
+  status.style.color = '#64748B';
+  status.textContent = 'Checking…';
+  postSettings({ home_location: home })
+    .then(data => {
+      if (data.error) {
+        status.style.color = '#C0392B';
+        status.textContent = data.error;
+      } else {
+        setHomeDisplay(data.home_display || home);
+        status.style.color = '#1C8C4B';
+        status.textContent = 'Saved.';
+        setTimeout(closeLocPop, 700);
+      }
+    })
+    .catch(() => { status.style.color = '#C0392B'; status.textContent = 'Save failed.'; });
+}
+
+// ─── First-run setup card ────────────────────────────────────────────────────
+const SKIP_KEY = 'metgpt.setupSkipped';
+
+function setupSkipped() {
+  try { return localStorage.getItem(SKIP_KEY) === '1'; } catch (e) { return false; }
+}
+
+function welcomeCard() {
+  // The setup card only appears for someone with no home location who hasn't
+  // already waved it away, so it never nags a returning user.
+  const id = (!hasHome && !setupSkipped()) ? 'tpl-setup' : 'tpl-welcome';
+  return document.getElementById(id).content.cloneNode(true);
+}
+
+function renderWelcome() {
+  chatWindow.innerHTML = '';
+  chatWindow.appendChild(welcomeCard());
+}
+
+function skipSetup() {
+  try { localStorage.setItem(SKIP_KEY, '1'); } catch (e) {}
+  renderWelcome();
+}
+
+function saveSetupLocation() {
+  const inp = document.getElementById('setup-input');
+  const status = document.getElementById('setup-status');
+  const home = inp ? inp.value.trim() : '';
+  if (!home) { status.style.color = '#C0392B'; status.textContent = 'Type a location first.'; return; }
+  status.style.color = '#64748B';
+  status.textContent = 'Checking…';
+  postSettings({ home_location: home })
+    .then(data => {
+      if (data.error) {
+        status.style.color = '#C0392B';
+        status.textContent = data.error;
+      } else {
+        const name = data.home_display || home;
+        setHomeDisplay(name);
+        const hi = document.getElementById('home-input');
+        if (hi) hi.value = home;
+        renderWelcome();
+      }
+    })
+    .catch(() => { status.style.color = '#C0392B'; status.textContent = 'Save failed.'; });
+}
+
+// ─── Browser geolocation → reverse-geocode → set home location ───────────────
+// fromSetup routes the messages to the setup card rather than the popover.
+function useMyLocation(fromSetup) {
+  const status = document.getElementById(fromSetup ? 'setup-status' : 'loc-pop-status');
+  const say = (msg, colour) => {
+    if (!status) return;
+    status.style.color = colour || '#64748B';
+    status.textContent = msg;
+  };
   if (!navigator.geolocation) {
-    status.style.color = '#FF9B9B';
-    status.textContent = 'GPS not supported. Please type a location above instead.';
+    say('GPS is not supported here. Please type a location instead.', '#C0392B');
     return;
   }
-  status.style.color = 'rgba(255,255,255,0.8)';
-  status.textContent = 'Detecting your location…';
+  say('Detecting your location…');
   navigator.geolocation.getCurrentPosition(
     pos => {
       fetch('/geolocate', {
@@ -376,21 +583,20 @@ function useMyLocation() {
       })
       .then(r => r.json())
       .then(data => {
-        if (data.error) {
-          status.style.color = '#FF9B9B';
-          status.textContent = data.error;
+        if (data.error) { say(data.error, '#C0392B'); return; }
+        const hi = document.getElementById('home-input');
+        if (hi) hi.value = data.home;
+        setHomeDisplay(data.home);
+        if (fromSetup) {
+          renderWelcome();
         } else {
-          const inp = document.getElementById('home-input');
-          if (inp) inp.value = data.home;
-          status.style.color = '#7FE3A8';
-          status.textContent = 'Location set: ' + data.home;
-          setTimeout(() => { status.textContent = ''; }, 3000);
+          say('Location set: ' + data.home, '#1C8C4B');
+          setTimeout(closeLocPop, 900);
         }
       })
-      .catch(() => { status.style.color = '#FF9B9B'; status.textContent = 'Failed to set location.'; });
+      .catch(() => say('Failed to set location.', '#C0392B'));
     },
     err => {
-      status.style.color = '#FF9B9B';
       let reason = 'Could not get your location';
       if (err.code === err.PERMISSION_DENIED) {
         reason = 'Location access is blocked for this site (check your browser and system location settings)';
@@ -399,7 +605,7 @@ function useMyLocation() {
       } else if (err.code === err.TIMEOUT) {
         reason = 'Finding your location took too long';
       }
-      status.textContent = reason + '. Please type a location above instead.';
+      say(reason + '. Please type a location instead.', '#C0392B');
       console.warn('Geolocation error', err.code, err.message);
     },
     // Desktops (e.g. a Mac mini) have no GPS and locate via Wi-Fi, so don't
@@ -408,48 +614,43 @@ function useMyLocation() {
   );
 }
 
-// Settings
-function saveSettings(silent) {
-  const homeEl = document.getElementById('home-input');
-  const home = homeEl ? homeEl.value.trim() : '';
-  const ctx  = document.getElementById('ctx-input').value.trim();
-  const status = document.getElementById('save-status');
-  if (!silent) status.textContent = 'Saving…';
-  fetch('/settings', {
+// ─── Saving ──────────────────────────────────────────────────────────────────
+// Only the keys passed are sent, so the location popover and the preferences
+// panel can each save without clobbering the other's fields.
+function postSettings(payload) {
+  return fetch('/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ home_location: home, user_context: ctx, answer_length: answerLength }),
+    body: JSON.stringify(payload),
+  }).then(r => r.json());
+}
+
+function saveSettings(silent) {
+  const ctxEl = document.getElementById('ctx-input');
+  const status = document.getElementById('save-status');
+  if (!silent && status) { status.style.color = '#9FD3B0'; status.textContent = 'Saving…'; }
+  postSettings({
+    user_context: ctxEl ? ctxEl.value.trim() : '',
+    answer_length: answerLength,
+    temp_unit: tempUnit,
+    rain_unit: rainUnit,
+    wind_units: windUnits,
   })
-  .then(r => r.json())
   .then(data => {
     if (data.error) {
-      status.style.color = '#FF9B9B';
-      status.textContent = data.error;
+      flashSaveStatus(data.error, true);
     } else if (!silent) {
-      status.style.color = '#7FE3A8';
-      status.textContent = 'Saved!';
-      setTimeout(() => { status.textContent = ''; }, 2500);
+      flashSaveStatus('Saved!', false);
     }
   })
-  .catch(() => { if (!silent) status.textContent = 'Save failed.'; });
+  .catch(() => { if (!silent) flashSaveStatus('Save failed.', true); });
 }
 
 document.getElementById('save-settings').addEventListener('click', () => saveSettings(false));
 
 // Clear
 document.getElementById('clear-btn').addEventListener('click', () => {
-  fetch('/clear', { method: 'POST' }).then(() => {
-    chatWindow.innerHTML = `
-      <div class="welcome-card">
-        <p class="welcome-title">Hello! I'm MetGPT.</p>
-        <p class="welcome-body">Ask me about the weather anywhere in Ireland — for hiking, travel, commuting, or anything else.</p>
-        <div class="suggestions">
-          <button class="suggestion" onclick="sendSuggestion(this)">Will it rain in Galway this weekend?</button>
-          <button class="suggestion" onclick="sendSuggestion(this)">Is it a good day for hiking in Wicklow?</button>
-          <button class="suggestion" onclick="sendSuggestion(this)">What should I wear in Cork tomorrow?</button>
-        </div>
-      </div>`;
-  });
+  fetch('/clear', { method: 'POST' }).then(renderWelcome);
 });
 
 function escHtml(str) {
@@ -459,3 +660,14 @@ function escHtml(str) {
     .replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
 }
+
+// ─── Boot ────────────────────────────────────────────────────────────────────
+setAnswerLength(answerLength, false);
+setTempUnit(tempUnit, false);
+setRainUnit(rainUnit, false);
+syncWindChips();
+setHomeDisplay(S.home_display || '');
+wasMobile = isMobile();
+applyStoredPanelState();
+renderWelcome();
+window.addEventListener('resize', onViewportChange);

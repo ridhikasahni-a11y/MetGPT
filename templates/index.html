@@ -6,19 +6,36 @@
 <title>MetGPT — Irish Weather Assistant</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <style>
-  /* Push the settings group to the bottom of the sidebar */
+  /* ─── Side panel ────────────────────────────────────────────────────────
+     The panel is now preferences only — location lives in the topbar chip.
+     It is collapsed by default on both desktop and mobile; the hamburger
+     opens it and the choice is remembered in localStorage. */
   .sidebar { display: flex; flex-direction: column; }
-  .sidebar-settings { margin-top: auto; display: flex; flex-direction: column; gap: 1.25rem; }
+  .sidebar-settings { display: flex; flex-direction: column; gap: 1.25rem; }
+  .layout.sidebar-collapsed .sidebar { display: none; }
 
-  /* Answer-length toggle */
-  .len-toggle {
+  /* When the drawer is open on mobile it sits on top of the hamburger, so
+     there has to be a close control inside the drawer itself. */
+  .panel-close { display: none; }
+  .sidebar-header { position: relative; }
+
+  .panel-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.01em;
+    margin-bottom: 0.25rem;
+  }
+
+  /* ─── Segmented toggles (answer length, temperature, rainfall) ───────── */
+  .seg-toggle {
     display: flex;
     gap: 4px;
     background: rgba(255,255,255,0.1);
     border-radius: var(--radius);
     padding: 3px;
   }
-  .len-opt {
+  .seg-opt {
     flex: 1;
     border: none;
     background: transparent;
@@ -29,17 +46,47 @@
     cursor: pointer;
     transition: all 0.15s;
   }
-  .len-opt.active {
+  .seg-opt.active {
     background: #fff;
     color: var(--teal-dark);
     font-weight: 700;
     box-shadow: 0 1px 3px rgba(0,0,0,0.15);
   }
+  .seg-opt:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
 
-  /* Topbar buttons */
+  /* ─── Wind units: multi-select chips ────────────────────────────────── */
+  .unit-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .unit-chip {
+    border: 1px solid rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.8);
+    border-radius: 999px;
+    padding: 5px 11px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .unit-chip[aria-pressed="true"] {
+    background: #fff;
+    color: var(--teal-dark);
+    border-color: #fff;
+    font-weight: 700;
+  }
+  .unit-chip:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+
+  /* ─── Topbar ────────────────────────────────────────────────────────── */
   .topbar-actions { display: flex; align-items: center; gap: 8px; }
+  .topbar-left { display: flex; align-items: center; min-width: 0; overflow: hidden; }
+  .topbar-left .chat-title,
+  .topbar-left .chat-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .topbar-actions { flex: none; }
+
   .sidebar-toggle {
-    display: none;              
+    display: flex;
     background: none;
     border: 0.5px solid var(--gray-200);
     border-radius: var(--radius);
@@ -48,8 +95,10 @@
     cursor: pointer;
     margin-right: 12px;
     align-items: center;
+    flex: none;
   }
   .sidebar-toggle:hover { background: var(--gray-100); }
+
   .btn-logout {
     display: flex;
     align-items: center;
@@ -65,43 +114,190 @@
   }
   .btn-logout:hover { background: var(--gray-100); }
 
-  /* Collapsed sidebar */
-  .layout.sidebar-collapsed .sidebar { display: none; }
-
-  /* Use my location button */
-  .btn-geo {
+  /* ─── Location chip ─────────────────────────────────────────────────── */
+  .loc-chip {
     display: flex;
     align-items: center;
     gap: 6px;
-    width: 100%;
-    margin-top: 6px;
-    background: rgba(255,255,255,0.12);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: var(--radius);
-    padding: 7px 10px;
-    font-size: 12px;
-    font-weight: 500;
+    flex: none;
+    max-width: 230px;
+    background: var(--gray-100, #F1F5F9);
+    border: 0.5px solid var(--gray-200);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 13px;
+    color: var(--gray-600);
     cursor: pointer;
-    transition: background 0.15s;
+    transition: all 0.15s;
   }
-  .btn-geo:hover { background: rgba(255,255,255,0.2); }
+  .loc-chip:hover { background: var(--gray-200); }
+  .loc-chip svg { flex: none; }
+  .loc-chip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Unset state — this is the quiet nudge for people who skipped setup */
+  .loc-chip.unset {
+    background: #FFF4E0;
+    border-color: #F0C067;
+    color: #8A5A00;
+    font-weight: 600;
+  }
+  .loc-chip.unset:hover { background: #FFEBC7; }
 
-  /* Save button + status on navy */
-  .sidebar .btn-save {
+  /* ─── Location popover ──────────────────────────────────────────────── */
+  .loc-pop-backdrop { display: none; position: fixed; inset: 0; z-index: 60; }
+  .loc-pop-backdrop.open { display: block; }
+
+  .loc-pop {
+    display: none;
+    position: absolute;
+    z-index: 61;
+    width: 290px;
     background: #fff;
-    color: var(--teal-dark);
-    font-weight: 700;
+    border: 0.5px solid var(--gray-200);
+    border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(10,37,64,0.18);
+    padding: 14px;
   }
+  .loc-pop.open { display: block; }
+  .loc-pop label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--gray-400);
+    margin-bottom: 6px;
+  }
+  .loc-pop input[type="text"] {
+    width: 100%;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    color: var(--gray-600);
+  }
+  .loc-pop input[type="text"]:focus {
+    outline: none;
+    border-color: var(--blue);
+  }
+  .loc-pop-row { display: flex; gap: 8px; margin-top: 10px; }
+  .loc-pop-row button { flex: 1; }
+  .loc-pop-status { font-size: 11px; margin-top: 8px; min-height: 14px; }
+  .loc-pop-hint { font-size: 11px; color: var(--gray-400); margin-top: 8px; }
+
+  .btn-mini {
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid var(--gray-200);
+    background: #fff;
+    color: var(--gray-600);
+  }
+  .btn-mini:hover { background: var(--gray-100); }
+  .btn-mini.primary {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+  }
+  .btn-mini.primary:hover { opacity: 0.9; }
+
+  /* ─── Geo button (used in both the popover and the setup card) ──────── */
+  .btn-geo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .sidebar .btn-save { background: #fff; color: var(--teal-dark); font-weight: 700; }
   .sidebar .btn-save:hover { background: #EAF2FB; opacity: 1; }
   .sidebar .save-status { color: #9FD3B0; }
+
+  /* ─── First-run setup card ──────────────────────────────────────────── */
+  .setup-card {
+    background: #fff;
+    border: 1px solid #CFE0F5;
+    border-left: 3px solid var(--blue);
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+    box-shadow: 0 2px 10px rgba(10,37,64,0.06);
+  }
+  .setup-title { font-size: 16px; font-weight: 700; color: var(--teal-dark); margin-bottom: 4px; }
+  .setup-body { font-size: 13px; color: var(--gray-600); margin-bottom: 0.9rem; }
+  .setup-field { display: flex; gap: 8px; flex-wrap: wrap; }
+  .setup-field input[type="text"] {
+    flex: 1 1 150px;
+    min-width: 0;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 9px 11px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--gray-600);
+  }
+  .setup-field input[type="text"]:focus { outline: none; border-color: var(--blue); }
+  .setup-actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  .setup-status { font-size: 12px; min-height: 16px; margin-top: 8px; }
+  .btn-skip {
+    background: none;
+    border: none;
+    color: var(--gray-400);
+    font-size: 12px;
+    font-family: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 6px 2px;
+  }
+  .btn-skip:hover { color: var(--gray-600); }
+
+  /* ─── Mobile ────────────────────────────────────────────────────────── */
+  @media (max-width: 760px) {
+    .panel-close {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      width: 32px;
+      height: 32px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 50%;
+      color: #fff;
+      cursor: pointer;
+      padding: 0;
+    }
+    .panel-close:hover { background: rgba(255,255,255,0.22); }
+
+    /* style.css hides every span in .topbar-actions on mobile so the Clear
+       and Sign out buttons collapse to icons. The chip's label must survive
+       that — it is the only thing telling a new user to set a location. */
+    .topbar-actions .loc-chip-text { display: inline !important; }
+    .loc-chip { max-width: 150px; padding: 6px 10px; flex: none; }
+    .loc-pop {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      width: auto;
+      top: 64px;
+    }
+    .btn-logout, .btn-clear { padding: 6px 8px; }
+  }
 </style>
 </head>
 <body>
 
 <div class="layout">
 
-  <!-- Sidebar -->
+  <!-- Preferences panel — collapsed by default, opened with the hamburger -->
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="logo">
@@ -115,38 +311,59 @@
         <span class="logo-text">MetGPT</span>
       </div>
       <p class="logo-sub">Irish weather assistant</p>
+      <button class="panel-close" type="button" onclick="closeSidebar()" aria-label="Close preferences">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
 
-    <!-- Settings pushed to bottom -->
     <div class="sidebar-settings">
-      <div class="sidebar-section">
-        <label class="section-label">Home location</label>
-        <input type="text" id="home-input" placeholder="e.g. Dublin" value="{{ home_location }}">
-        <button class="btn-geo" onclick="useMyLocation()" type="button">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-          Use my location
-        </button>
-        <p class="field-hint">Type a location or detect via GPS · used when none is mentioned in chat</p>
-      </div>
+      <p class="panel-title">Preferences</p>
 
       <div class="sidebar-section">
-        <label class="section-label">About you</label>
-        <textarea id="ctx-input" placeholder="e.g. I cycle to work and have asthma" rows="3">{{ user_context }}</textarea>
+        <label class="section-label" for="ctx-input">About you</label>
+        <textarea id="ctx-input" placeholder="e.g. I cycle to work most days" rows="3">{{ user_context }}</textarea>
         <p class="field-hint">Helps tailor advice to your needs</p>
       </div>
 
       <div class="sidebar-section">
         <label class="section-label">Answer length</label>
-        <div class="len-toggle">
-          <button class="len-opt" data-len="short" onclick="setAnswerLength('short', true)">Short</button>
-          <button class="len-opt" data-len="detailed" onclick="setAnswerLength('detailed', true)">Long</button>
+        <div class="seg-toggle" role="group" aria-label="Answer length">
+          <button type="button" class="seg-opt" data-len="short" onclick="setAnswerLength('short', true)">Short</button>
+          <button type="button" class="seg-opt" data-len="detailed" onclick="setAnswerLength('detailed', true)">Long</button>
         </div>
         <p class="field-hint">Short = quick &amp; precise · Long = detailed advice</p>
       </div>
 
-      <button class="btn-save" id="save-settings">Save settings</button>
-      <p class="save-status" id="save-status"></p>
+      <div class="sidebar-section">
+        <label class="section-label">Temperature</label>
+        <div class="seg-toggle" role="group" aria-label="Temperature unit">
+          <button type="button" class="seg-opt" data-temp="c" onclick="setTempUnit('c', true)">°C</button>
+          <button type="button" class="seg-opt" data-temp="f" onclick="setTempUnit('f', true)">°F</button>
+        </div>
+      </div>
 
+      <div class="sidebar-section">
+        <label class="section-label">Wind units</label>
+        <div class="unit-chips" id="wind-units" role="group" aria-label="Wind units">
+          <button type="button" class="unit-chip" data-wind="kmh" aria-pressed="false" onclick="toggleWindUnit('kmh')">km/h</button>
+          <button type="button" class="unit-chip" data-wind="ms"  aria-pressed="false" onclick="toggleWindUnit('ms')">m/s</button>
+          <button type="button" class="unit-chip" data-wind="mph" aria-pressed="false" onclick="toggleWindUnit('mph')">mph</button>
+          <button type="button" class="unit-chip" data-wind="kn"  aria-pressed="false" onclick="toggleWindUnit('kn')">knots</button>
+          <button type="button" class="unit-chip" data-wind="bft" aria-pressed="false" onclick="toggleWindUnit('bft')">Beaufort</button>
+        </div>
+        <p class="field-hint">Pick one or more · shown in this order</p>
+      </div>
+
+      <div class="sidebar-section">
+        <label class="section-label">Rainfall</label>
+        <div class="seg-toggle" role="group" aria-label="Rainfall unit">
+          <button type="button" class="seg-opt" data-rain="mm" onclick="setRainUnit('mm', true)">mm</button>
+          <button type="button" class="seg-opt" data-rain="in" onclick="setRainUnit('in', true)">inches</button>
+        </div>
+      </div>
+
+      <button class="btn-save" id="save-settings">Save preferences</button>
+      <p class="save-status" id="save-status"></p>
     </div>
   </aside>
 
@@ -154,8 +371,8 @@
   <main class="main">
 
     <div class="chat-topbar">
-      <div style="display:flex; align-items:center;">
-        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+      <div class="topbar-left">
+        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Preferences" aria-label="Preferences">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <div>
@@ -164,7 +381,10 @@
         </div>
       </div>
       <div class="topbar-actions">
-        {% if username %}<span style="font-size:12px;color:var(--gray-400);">{{ username }}</span>{% endif %}
+        <button class="loc-chip" id="loc-chip" onclick="toggleLocPop(event)" title="Your home location">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span class="loc-chip-text" id="loc-chip-text">Set location</span>
+        </button>
         <button class="btn-clear" id="clear-btn" title="Clear conversation">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
           <span>Clear</span>
@@ -176,17 +396,24 @@
       </div>
     </div>
 
-    <div class="chat-window" id="chat-window">
-      <div class="welcome-card">
-        <p class="welcome-title">Hello! I'm MetGPT.</p>
-        <p class="welcome-body">Ask me about the weather anywhere in Ireland — for hiking, travel, commuting, or anything else.</p>
-        <div class="suggestions">
-          <button class="suggestion" onclick="sendSuggestion(this)">Will it rain in Galway this weekend?</button>
-          <button class="suggestion" onclick="sendSuggestion(this)">Is it a good day for hiking in Wicklow?</button>
-          <button class="suggestion" onclick="sendSuggestion(this)">What should I wear in Cork tomorrow?</button>
-        </div>
+    <!-- Location popover, anchored under the chip -->
+    <div class="loc-pop-backdrop" id="loc-pop-backdrop" onclick="closeLocPop()"></div>
+    <div class="loc-pop" id="loc-pop" role="dialog" aria-label="Home location">
+      <label for="home-input">Home location</label>
+      <input type="text" id="home-input" placeholder="e.g. Dublin" value="{{ home_location }}"
+             autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();saveHomeLocation();}">
+      <div class="loc-pop-row">
+        <button class="btn-mini btn-geo" type="button" onclick="useMyLocation()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          Detect
+        </button>
+        <button class="btn-mini primary" type="button" onclick="saveHomeLocation()">Save</button>
       </div>
+      <p class="loc-pop-status" id="loc-pop-status"></p>
+      <p class="loc-pop-hint">Used whenever you don't name a place in your question.</p>
     </div>
+
+    <div class="chat-window" id="chat-window"></div>
 
     <div class="chat-input-row">
       <textarea
@@ -203,8 +430,50 @@
   </main>
 </div>
 
-<script>window.__ANSWER_LENGTH__ = "{{ answer_length }}";</script>
+<!-- Both welcome variants live here so the Clear button can rebuild
+     whichever one is currently right without duplicating the markup. -->
+<template id="tpl-setup">
+  <div class="setup-card welcome-card">
+    <p class="setup-title">Welcome to MetGPT.</p>
+    <p class="setup-body">First, where are you based? I'll use it whenever you ask about the weather without naming a place.</p>
+    <div class="setup-field">
+      <input type="text" id="setup-input" placeholder="e.g. Dublin" autocomplete="off"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();saveSetupLocation();}">
+      <button class="btn-mini primary" type="button" onclick="saveSetupLocation()">Save</button>
+    </div>
+    <div class="setup-actions">
+      <button class="btn-mini btn-geo" type="button" onclick="useMyLocation(true)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        Detect my location
+      </button>
+      <button class="btn-skip" type="button" onclick="skipSetup()">Skip for now</button>
+    </div>
+    <p class="setup-status" id="setup-status"></p>
+  </div>
+</template>
+
+<template id="tpl-welcome">
+  <div class="welcome-card">
+    <p class="welcome-title">Hello! I'm MetGPT.</p>
+    <p class="welcome-body">Ask me about the weather anywhere in Ireland, for hiking, travel, commuting, or anything else.</p>
+    <div class="suggestions">
+      <button class="suggestion" onclick="sendSuggestion(this)">Will it rain in Galway this weekend?</button>
+      <button class="suggestion" onclick="sendSuggestion(this)">Is it a good day for hiking in Wicklow?</button>
+      <button class="suggestion" onclick="sendSuggestion(this)">What should I wear in Cork tomorrow?</button>
+    </div>
+  </div>
+</template>
+
+<script>
+  window.__SETTINGS__ = {
+    answer_length: "{{ settings.answer_length }}",
+    temp_unit:     "{{ settings.temp_unit }}",
+    rain_unit:     "{{ settings.rain_unit }}",
+    wind_units:    {{ settings.wind_units | tojson }},
+    home_display:  {{ home_display | tojson }},
+    has_home:      {{ (settings.home_location | length > 0) | tojson }}
+  };
+</script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-<script>setAnswerLength(window.__ANSWER_LENGTH__ || 'detailed', false);</script>
 </body>
 </html>

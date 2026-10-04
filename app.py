@@ -13,15 +13,15 @@ def allowed_gai_family():
     return socket.AF_INET
 connection.allowed_gai_family = allowed_gai_family
 
-import os, json, re, logging, secrets, threading, xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+import os, json, re, logging, secrets, sqlite3, threading, xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from functools import wraps
 from time import time
 
 import requests
 import feedparser
-from flask import Flask, render_template, request, session, redirect, url_for, abort, jsonify
+from flask import Flask, g, render_template, request, session, redirect, url_for, abort, jsonify
 from flask_session import Session
 from cachetools import TTLCache, cached
 from haversine import haversine, Unit
@@ -44,11 +44,20 @@ app = Flask(__name__)
 # Use a stable secret from .env so logins survive server restarts.
 # Falls back to a random key if not set (sessions reset on restart).
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_urlsafe(32)
+_EPHEMERAL_SECRET = not os.getenv("FLASK_SECRET_KEY")
 # Cookie settings — needed for sessions to work over HTTPS (e.g. on Railway)
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 # Only require HTTPS-only cookies in production (Railway sets RAILWAY_ENVIRONMENT)
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("RAILWAY_ENVIRONMENT") is not None
+# Keep people logged in across browser restarts. Without this the session
+# cookie is a browser-session cookie and every returning user looks brand new.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=90)
+
+
+@app.before_request
+def _make_session_permanent():
+    session.permanent = True
 
 # Session backend: use Flask's built-in signed-cookie sessions in production
 # (works across gunicorn workers with no shared filesystem). Locally we can
@@ -59,12 +68,16 @@ if not USE_COOKIE_SESSIONS:
     SESSION_DIR = "/tmp/flask_session_metgpt"
     os.makedirs(SESSION_DIR, exist_ok=True)
     app.config["SESSION_FILE_DIR"] = SESSION_DIR
-    app.config["SESSION_PERMANENT"] = False
+    app.config["SESSION_PERMANENT"] = True
     Session(app)
 # else: default Flask cookie sessions (no Session(app) call needed)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
+
+if _EPHEMERAL_SECRET:
+    logger.warning("FLASK_SECRET_KEY is not set — a random key is being used, so every "
+                   "restart will log all users out. Set it in .env for persistent logins.")
 
 # ─── Authentication ───────────────────────────────────────────────────────────
 # Users are defined in .env as:  METGPT_USERS=alice:pass1,bob:pass2
@@ -550,14 +563,6 @@ def round_pct(v, step=5):
     return None if v is None else _half_up(v / float(step)) * step
 
 
-def format_rain(v):
-    """Rainfall as display text, e.g. '0 mm', '0.6 mm', '4 mm'."""
-    r = round_rain(v)
-    if r is None:
-        return None
-    return "%d mm" % int(r) if r >= 2 or r == 0 else "%.1f mm" % r
-
-
 def format_prob(v):
     """Probability to the nearest 5%, never claiming total certainty."""
     p = round_pct(v)
@@ -570,14 +575,204 @@ def format_prob(v):
     return "%d%%" % p
 
 
-def format_temp_range(tmin, tmax, unit="°C"):
-    """A min-max temperature range in whole degrees, collapsed if they match."""
-    a, b = round_temp(tmin), round_temp(tmax)
+# ─── Per-user settings store ──────────────────────────────────────────────────
+# Settings follow the person, not the browser. The session carries only the
+# login and the conversation; everything the user configures lives here under
+# their username, so it survives a browser restart and follows them to another
+# device.
+#
+# NOTE: container filesystems are usually ephemeral. On Railway, point
+# METGPT_DATA_DIR at a mounted volume or these settings reset on every deploy.
+
+DATA_DIR = os.getenv("METGPT_DATA_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+SETTINGS_DB = os.path.join(DATA_DIR, "settings.db")
+
+TEMP_UNITS = ("c", "f")
+WIND_UNITS = ("kmh", "ms", "mph", "kn", "bft")
+RAIN_UNITS = ("mm", "in")
+
+DEFAULT_SETTINGS = {
+    "home_location": "",
+    "home_lat": None,
+    "home_lon": None,
+    "home_display": "",
+    "user_context": "",
+    "answer_length": "detailed",
+    "temp_unit": "c",
+    "wind_units": ["kmh", "ms"],
+    "rain_unit": "mm",
+}
+
+
+def _settings_db():
+    conn = sqlite3.connect(SETTINGS_DB, timeout=5)
+    conn.execute("""CREATE TABLE IF NOT EXISTS user_settings (
+        username   TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL)""")
+    return conn
+
+
+def _clean_settings(raw):
+    """Coerce whatever is stored into a valid settings dict."""
+    s = dict(DEFAULT_SETTINGS)
+    s["wind_units"] = list(DEFAULT_SETTINGS["wind_units"])
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k in DEFAULT_SETTINGS:
+                s[k] = v
+    if s.get("answer_length") not in ("short", "detailed"):
+        s["answer_length"] = DEFAULT_SETTINGS["answer_length"]
+    if s.get("temp_unit") not in TEMP_UNITS:
+        s["temp_unit"] = DEFAULT_SETTINGS["temp_unit"]
+    if s.get("rain_unit") not in RAIN_UNITS:
+        s["rain_unit"] = DEFAULT_SETTINGS["rain_unit"]
+    # Keep the canonical order rather than whatever order they were ticked in,
+    # and never end up with no wind unit at all. The isinstance guard matters:
+    # a bare string like "kmh" would otherwise pass the "in" test by substring
+    # and silently become a one-unit selection.
+    raw_wind = s.get("wind_units")
+    if not isinstance(raw_wind, (list, tuple)):
+        raw_wind = []
+    picked = [u for u in WIND_UNITS if u in raw_wind]
+    s["wind_units"] = picked or list(DEFAULT_SETTINGS["wind_units"])
+    for k in ("home_location", "home_display", "user_context"):
+        s[k] = (s.get(k) or "")
+    return s
+
+
+def load_settings(username):
+    if not username:
+        return _clean_settings(None)
+    try:
+        with _settings_db() as conn:
+            row = conn.execute(
+                "SELECT data FROM user_settings WHERE username = ?", (username,)).fetchone()
+        return _clean_settings(json.loads(row[0]) if row else None)
+    except Exception as e:
+        logger.error("Could not load settings for %s: %s", username, e)
+        return _clean_settings(None)
+
+
+def save_settings(username, settings):
+    if not username:
+        return False
+    try:
+        with _settings_db() as conn:
+            conn.execute(
+                "INSERT INTO user_settings (username, data, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(username) DO UPDATE SET data = excluded.data, "
+                "updated_at = excluded.updated_at",
+                (username, json.dumps(_clean_settings(settings)),
+                 datetime.now(timezone.utc).isoformat()))
+        return True
+    except Exception as e:
+        logger.error("Could not save settings for %s: %s", username, e)
+        return False
+
+
+def current_settings():
+    """This request's settings for the logged-in user, read once per request."""
+    if not hasattr(g, "metgpt_settings"):
+        g.metgpt_settings = load_settings(session.get("logged_in_user", ""))
+    return g.metgpt_settings
+
+
+def update_settings(**changes):
+    """Apply changes, persist them, and keep this request's copy in step."""
+    s = dict(current_settings())
+    s.update(changes)
+    s = _clean_settings(s)
+    save_settings(session.get("logged_in_user", ""), s)
+    g.metgpt_settings = s
+    return s
+
+
+# ─── Units ────────────────────────────────────────────────────────────────────
+# Each unit carries its own rounding step, chosen so the figure never claims
+# more precision than a forecast can support: 5 for the coarse wind units,
+# 1 for the fine ones, whole degrees for temperature either side.
+
+TEMP_LABEL = {"c": "°C", "f": "°F"}
+WIND_LABEL = {"kmh": "km/h", "ms": "m/s", "mph": "mph", "kn": "kn", "bft": "Beaufort"}
+RAIN_LABEL = {"mm": "mm", "in": "in"}
+
+# Upper bound of each Beaufort force in m/s (force 12 is open-ended).
+BEAUFORT_MAX_MS = [0.5, 1.5, 3.3, 5.4, 7.9, 10.7, 13.8, 17.1, 20.7, 24.4, 28.4, 32.6]
+
+
+def to_beaufort(ms):
+    """Beaufort force from wind speed in m/s. Already a whole-number scale."""
+    if ms is None:
+        return None
+    for force, upper in enumerate(BEAUFORT_MAX_MS):
+        if ms < upper:
+            return force
+    return 12
+
+
+def format_temp(celsius, unit="c"):
+    """A temperature in the chosen unit, always to the whole degree."""
+    if celsius is None:
+        return None
+    if unit == "f":
+        return "%d°F" % _half_up(celsius * 9.0 / 5.0 + 32.0)
+    return "%d°C" % _half_up(celsius)
+
+
+def format_temp_range(tmin, tmax, unit="c"):
+    """A min-max range in whole degrees, collapsed when rounding makes them equal."""
+    a, b = format_temp(tmin, unit), format_temp(tmax, unit)
     if a is None and b is None:
         return "N/A"
     if a is None or b is None:
-        return "%d%s" % (b if a is None else a, unit)
-    return "%d%s" % (a, unit) if a == b else "%d–%d%s" % (a, b, unit)
+        return b if a is None else a
+    if a == b:
+        return a
+    # "8–15°C", not "8°C–15°C"
+    suffix = TEMP_LABEL[unit if unit in TEMP_LABEL else "c"]
+    return "%s–%s" % (a[:-len(suffix)], b)
+
+
+def format_wind(ms, units=None):
+    """Wind speed in each chosen unit, e.g. '20 km/h · 5 m/s'."""
+    if ms is None:
+        return None
+    units = [u for u in WIND_UNITS if u in (units or DEFAULT_SETTINGS["wind_units"])] \
+        or list(DEFAULT_SETTINGS["wind_units"])
+    parts = []
+    for u in units:
+        if u == "kmh":
+            parts.append("%d km/h" % ms_to_kmh(ms))
+        elif u == "ms":
+            parts.append("%d m/s" % round_wind_ms(ms))
+        elif u == "mph":
+            parts.append("%d mph" % ms_to_mph(ms))
+        elif u == "kn":                     # knots, to the nearest 5
+            parts.append("%d kn" % (_half_up(ms * 1.94384 / 5.0) * 5))
+        elif u == "bft":
+            parts.append("F%d" % to_beaufort(ms))
+    return " · ".join(parts)
+
+
+def format_rain(mm, unit="mm"):
+    """Rainfall in the chosen unit, at a step the forecast can actually support.
+
+    In mm that is the nearest mm once over 2 mm, and 0.1 mm below it. Inches
+    get the equivalent treatment: 2 mm is about 0.08 in, so above 0.1 in the
+    step is 0.05 in (roughly 1 mm) and below it two decimal places.
+    """
+    if mm is None:
+        return None
+    if unit == "in":
+        inches = mm / 25.4
+        if inches >= 0.1:
+            return "%.2f in" % (_half_up(inches / 0.05) * 0.05)
+        return "%.2f in" % (_half_up(inches * 100) / 100.0)
+    r = round_rain(mm)
+    return "%d mm" % int(r) if r >= 2 or r == 0 else "%.1f mm" % r
 
 
 # Roughly how long rain stays correlated with itself, in hours. A day is
@@ -633,47 +828,77 @@ def daily_rain_probability(hourly_rows):
     return round((1.0 - dry) * 100.0, 1)
 
 
-def display_day(fc):
-    """Round a daily forecast for display and for the LLM prompt."""
+def display_day(fc, units=None):
+    """Round and convert a daily forecast for display and for the LLM prompt.
+
+    The *_text fields are what gets shown and are in the user's chosen units.
+    The bare numbers stay in canonical units (°C, mm, m/s, %) because the
+    weather-icon thresholds and other logic are calibrated against those.
+    """
+    u = units or DEFAULT_SETTINGS
     wind_raw = fc.get("wind_avg")
     rain_raw = fc.get("rain_total")
     prob_raw = fc.get("rain_prob_day")
     return {
         "temp_min": round_temp(fc.get("temp_min")),
         "temp_max": round_temp(fc.get("temp_max")),
-        "temp_text": format_temp_range(fc.get("temp_min"), fc.get("temp_max")),
+        "temp_text": format_temp_range(fc.get("temp_min"), fc.get("temp_max"),
+                                       u.get("temp_unit", "c")),
         "rain_total": round_rain(rain_raw),
-        "rain_text": format_rain(rain_raw),
+        "rain_text": format_rain(rain_raw, u.get("rain_unit", "mm")),
         "rain_prob": round_pct(prob_raw),
         "rain_prob_text": format_prob(prob_raw),
         "wind_ms": round_wind_ms(wind_raw),
-        "wind_kmh": ms_to_kmh(wind_raw),
-        "wind_mph": ms_to_mph(wind_raw),
+        "wind_text": format_wind(wind_raw, u.get("wind_units")),
         "humidity": round_pct(fc.get("humidity_avg")),
     }
 
 
-def display_hour(hr):
-    """Round a single hourly row for display and for the LLM prompt."""
+def display_hour(hr, units=None):
+    """Round and convert a single hourly row for display and for the prompt."""
+    u = units or DEFAULT_SETTINGS
     wind_raw = hr.get("wind")
     gust_raw = hr.get("wind_gust")
     return {
         "time_str": hr.get("time_str", ""),
         "temperature": round_temp(hr.get("temperature")),
+        "temp_text": format_temp(hr.get("temperature"), u.get("temp_unit", "c")),
         "rain_mm": round_rain(hr.get("rain_mm")),
-        "rain_text": format_rain(hr.get("rain_mm")),
+        "rain_text": format_rain(hr.get("rain_mm"), u.get("rain_unit", "mm")),
         "rain_prob": round_pct(hr.get("rain_prob")),
         "rain_prob_text": format_prob(hr.get("rain_prob")),
         "wind_ms": round_wind_ms(wind_raw),
-        "wind_kmh": ms_to_kmh(wind_raw),
-        "wind_gust_ms": round_wind_ms(gust_raw),
-        "wind_gust_kmh": ms_to_kmh(gust_raw),
+        "wind_text": format_wind(wind_raw, u.get("wind_units")),
+        "wind_gust_text": format_wind(gust_raw, u.get("wind_units")),
         "wind_direction": hr.get("wind_direction"),
         "cloudiness": round_pct(hr.get("cloudiness")),
         "humidity": round_pct(hr.get("humidity")),
         "dew_point": round_temp(hr.get("dew_point")),
+        "dew_point_text": format_temp(hr.get("dew_point"), u.get("temp_unit", "c")),
         "pressure": None if hr.get("pressure") is None else int(round(hr["pressure"])),
     }
+
+
+def unit_instructions(prefs):
+    """The units paragraph of the prompt, built from the user's choices so the
+    prose matches the figures in the forecast data below it."""
+    temp = TEMP_LABEL.get(prefs.get("temp_unit", "c"), "°C")
+    other_temp = "Fahrenheit" if temp == "°C" else "Celsius"
+    names = {"kmh": "km/h", "ms": "m/s", "mph": "mph", "kn": "knots",
+             "bft": "the Beaufort scale (written as F5, F6 and so on)"}
+    picked = [names[u] for u in WIND_UNITS if u in prefs.get("wind_units", [])] or ["km/h"]
+    if len(picked) == 1:
+        wind = picked[0]
+    else:
+        wind = ", ".join(picked[:-1]) + " and " + picked[-1]
+    rain = "millimetres (mm)" if prefs.get("rain_unit", "mm") == "mm" else "inches (in)"
+    return (
+        f'Always give temperatures in {temp} only, e.g. "around 19{temp}". '
+        f'Never mention {other_temp}.\n'
+        f'Always give wind speed in {wind}, exactly as the data below writes it, '
+        f'and in no other unit.\n'
+        f'Always give rainfall in {rain}.'
+    )
 
 
 # ─── Met Éireann forecast ─────────────────────────────────────────────────────
@@ -839,7 +1064,8 @@ def _profile_mentions_pollen_condition(user_ctx):
 
 
 def generate_advice(forecasts, activities, user_text, history, query_type):
-    user_ctx = session.get("user_context", "").strip()
+    prefs = current_settings()
+    user_ctx = prefs["user_context"].strip()
     intro = f"User profile: {user_ctx}\n\n" if user_ctx else ""
 
     # Every figure here has already been rounded by display_day/display_hour,
@@ -854,23 +1080,24 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
             f"Location: {loc}, Date: {date} | "
             f"Temp: {d.get('temp_text')} | "
             f"Rain: {d.get('rain_text')} ({d.get('rain_prob_text')} chance) | "
-            f"Wind: {d.get('wind_ms')} m/s ({d.get('wind_kmh')} km/h) | "
+            f"Wind: {d.get('wind_text')} | "
             f"Humidity: {d.get('humidity')}%"
         )
         for hr in f.get("hourly", []):
             parts = []
-            if hr.get("temperature") is not None: parts.append(f"{hr['temperature']}°C")
+            if hr.get("temp_text") is not None: parts.append(hr["temp_text"])
             if hr.get("rain_text") is not None: parts.append(f"rain {hr['rain_text']}")
             if hr.get("rain_prob_text") is not None: parts.append(f"{hr['rain_prob_text']} chance")
-            if hr.get("wind_ms") is not None: parts.append(f"wind {hr['wind_ms']} m/s ({hr['wind_kmh']} km/h)")
+            if hr.get("wind_text") is not None: parts.append(f"wind {hr['wind_text']}")
             if hr.get("wind_direction"): parts.append(hr["wind_direction"])
             if hr.get("cloudiness") is not None: parts.append(f"cloud {hr['cloudiness']}%")
-            if hr.get("dew_point") is not None: parts.append(f"dew {hr['dew_point']}°C")
+            if hr.get("dew_point_text") is not None: parts.append(f"dew {hr['dew_point_text']}")
             if parts:
                 lines.append(f"  {hr.get('time_str', '')}: {', '.join(parts)}")
 
     forecast_text = "\n".join(lines) if lines else "No forecast data available."
 
+    unit_note = unit_instructions(prefs)
     today_str = datetime.now().strftime("%A, %d %B %Y")
     multi = len(forecasts) > 1
     range_note = (
@@ -881,7 +1108,7 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
     )
 
     # Answer-length preference: "short" or "detailed" (default detailed)
-    length_pref = session.get("answer_length", "detailed")
+    length_pref = prefs["answer_length"]
     if length_pref == "short":
         length_note = ("Keep the answer brief: 2-3 sentences maximum. State the key numbers and "
                        "one practical takeaway. No long explanations.\n")
@@ -908,17 +1135,18 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
 
     prompt = f"""{intro}You are MetGPT, a helpful Irish weather assistant. Today is {today_str}.
 When mentioning any date, calculate the correct day of the week from the date string in the data — do not guess. This query is classified as "{query_type}".
-Always give temperatures in Celsius only, e.g. "around 19°C". Never mention Fahrenheit.
-Always give wind speed in both m/s and km/h, e.g. "around 5 m/s (20 km/h)".
+{unit_note}
 
-PRECISION — this matters. A forecast is only so accurate, so never state a number more precisely than the data below:
-- Temperatures: whole degrees only, e.g. "14°C". Never a decimal place.
-- Wind: whole m/s, and km/h to the nearest 5, e.g. "5 m/s (20 km/h)".
-- Rainfall: write it exactly as given below, e.g. "4 mm" or "0.6 mm".
-- Probabilities: to the nearest 5%, e.g. "35%". Never write 0% or 100% — we are never that certain. Use "<5%" or ">95%" (or wording like "very unlikely" / "almost certain") instead.
-- Humidity and cloud cover: to the nearest 5%.
+TONE — this matters:
+Write the way an ordinary Irish person writes today, or the way a Met Éireann forecaster talks: plain, warm and matter-of-fact. Never use stage-Irish or tourist-brochure Irishness. Specifically banned: "top o' the morning", "begorrah", "faith and", "sure and", "to be sure", "bejaysus", "arrah", "musha", "the craic" dropped in for colour, leprechauns, shamrocks, and any mock-brogue spelling such as "ye olde" or "t'is". Do not open with a greeting, a salutation or the user's name. Start with the weather itself. Words that genuinely belong to everyday Irish English are fine where they fit naturally, and so are Irish-language words that people actually use, but never reach for either as decoration.
+
+PRECISION — this matters. Every figure below has already been rounded to a step a forecast can actually support, so never state a number more precisely than the data does:
+- Copy each figure exactly as it is written, unit included. Never add a decimal place that is not there, and never convert it into a different unit.
+- Temperatures are whole degrees. Never write a decimal temperature.
+- Probabilities are to the nearest 5%. Never write 0% or 100% — we are never that certain. Use "<5%" or ">95%" as the data does, or wording like "very unlikely" and "almost certain".
+- Humidity and cloud cover are to the nearest 5%.
 The daily rain chance below is the chance of rain at SOME POINT that day, not the chance in any one hour, so describe it that way. The per-hour figures in the hourly breakdown are the chance in that hour.
-Repeat the figures below as they are written. If you work out any figure yourself (an average, a range, a maximum, a conversion), round it the same way before writing it.
+If you work out any figure yourself (an average, a range, a maximum), round it the same way before writing it.
 Always be polite, friendly, and never rude or offensive to people. Do not swear ever. Do not criticise Met Éireann.
 {pollen_note}{length_note}{range_note}
 User asked: {user_text}
@@ -1067,7 +1295,7 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
 
     # 6) Still nothing → home location, then ask the user to provide one
     if not valid_locs:
-        home = session.get("user_home_location")
+        home = current_settings()["home_location"]
         if home:
             today = datetime.now().strftime("%Y-%m-%d")
             dates = [d["date"] for d in date_only] if date_only else [today]
@@ -1099,11 +1327,12 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
     for entry in valid_locs:
         loc_name, date_iso = entry["location"], entry["date"]
 
-        home = session.get("user_home_location")
-        if home and loc_name == home and session.get("user_home_lat"):
-            lat = session["user_home_lat"]
-            lon = session["user_home_lon"]
-            display_name = session.get("user_home_display", loc_name)
+        prefs = current_settings()
+        home = prefs["home_location"]
+        if home and loc_name == home and prefs["home_lat"] is not None:
+            lat = prefs["home_lat"]
+            lon = prefs["home_lon"]
+            display_name = prefs["home_display"] or loc_name
         else:
             lat, lon, display_name, ambiguous_counties = geocode_location(loc_name)
 
@@ -1135,9 +1364,10 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
             fc = day["forecast"]
             # Round once, here, and reuse for both the forecast card and the
             # advice prompt so the two can never show different numbers.
-            shown = display_day(fc)
+            units = current_settings()
+            shown = display_day(fc, units)
             hours = [
-                display_hour(h)
+                display_hour(h, units)
                 for h in sorted(day["hourly_data"], key=lambda x: x.get("time_str", ""))
             ]
             all_for_advice.append({
@@ -1198,11 +1428,14 @@ def index():
         session["sid"] = secrets.token_urlsafe(16)
     if "chat_history" not in session:
         session["chat_history"] = []
+    prefs = current_settings()
     return render_template("index.html",
-        home_location=session.get("user_home_location", ""),
-        user_context=session.get("user_context", ""),
+        settings=prefs,
+        home_location=prefs["home_location"],
+        home_display=prefs["home_display"] or prefs["home_location"],
+        user_context=prefs["user_context"],
         username=session.get("logged_in_user", ""),
-        answer_length=session.get("answer_length", "detailed"),
+        answer_length=prefs["answer_length"],
     )
 
 
@@ -1252,19 +1485,32 @@ def chat():
 @rate_limit
 def settings():
     data = request.get_json()
-    home = (data.get("home_location") or "").strip()
-    ctx = (data.get("user_context") or "").strip()
+    changes = {}
+
+    # Only touch the fields this request actually sent, so the location
+    # popover and the preferences panel can save independently of each other.
+    if "user_context" in data:
+        changes["user_context"] = (data.get("user_context") or "").strip()
     answer_length = (data.get("answer_length") or "").strip().lower()
     if answer_length in ("short", "detailed"):
-        session["answer_length"] = answer_length
+        changes["answer_length"] = answer_length
+    temp_unit = (data.get("temp_unit") or "").strip().lower()
+    if temp_unit in TEMP_UNITS:
+        changes["temp_unit"] = temp_unit
+    rain_unit = (data.get("rain_unit") or "").strip().lower()
+    if rain_unit in RAIN_UNITS:
+        changes["rain_unit"] = rain_unit
+    if isinstance(data.get("wind_units"), list):
+        picked = [u for u in WIND_UNITS if u in data["wind_units"]]
+        if picked:
+            changes["wind_units"] = picked
 
+    home = (data.get("home_location") or "").strip()
     if home:
         lat, lon, display, ambiguous_counties = geocode_location(home)
         if lat:
-            session["user_home_location"] = home
-            session["user_home_lat"] = lat
-            session["user_home_lon"] = lon
-            session["user_home_display"] = display
+            changes.update({"home_location": home, "home_lat": lat,
+                            "home_lon": lon, "home_display": display})
         elif ambiguous_counties:
             return jsonify({"error": (f"There's more than one '{home}' in Ireland — found in "
                                        f"{', '.join(ambiguous_counties)}. Try adding the county, "
@@ -1272,9 +1518,10 @@ def settings():
         else:
             return jsonify({"error": f"Could not find '{home}' in Ireland. Try a different spelling."}), 400
 
-    session["user_context"] = ctx
-    session.modified = True
-    return jsonify({"ok": True, "home_display": session.get("user_home_display", home)})
+    prefs = update_settings(**changes)
+    return jsonify({"ok": True,
+                    "home_display": prefs["home_display"] or prefs["home_location"],
+                    "has_home": bool(prefs["home_location"])})
 
 
 @app.route("/geolocate", methods=["POST"])
@@ -1294,12 +1541,9 @@ def geolocate():
     if country and country.lower() != "ie":
         return jsonify({"error": "Your detected location is outside Ireland. MetGPT only covers Irish weather."}), 400
 
-    session["user_home_location"] = place
-    session["user_home_lat"] = float(lat)
-    session["user_home_lon"] = float(lon)
-    session["user_home_display"] = place
-    session.modified = True
-    return jsonify({"ok": True, "home": place})
+    update_settings(home_location=place, home_lat=float(lat),
+                    home_lon=float(lon), home_display=place)
+    return jsonify({"ok": True, "home": place, "has_home": True})
 
 
 @app.route("/clear", methods=["POST"])
