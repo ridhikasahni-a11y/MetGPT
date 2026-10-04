@@ -905,19 +905,42 @@ def unit_instructions(prefs):
 
 # Not cached here: results are cached in _cached_locations (with a TTL), and
 # only successful fetches are stored, so a temporary API failure isn't kept.
+# The Met Éireann endpoint is occasionally slow. 8 seconds was tight enough
+# that an ordinary slow response looked like an outage, so allow longer and
+# try twice before giving up.
+MET_API_TIMEOUT = 15
+MET_API_ATTEMPTS = 2
+
+
 def fetch_forecast(lat, lon):
+    """Returns (forecasts, error).
+
+    error is None on success, "unreachable" when the API could not be reached
+    or returned an HTTP error, and "empty" when it answered but gave us nothing
+    usable. The caller needs the distinction to say something more helpful than
+    "could not fetch", and every failure is logged with the coordinates so the
+    cause is visible in the server log.
+    """
     url = f"http://openaccess.pf.api.met.ie/metno-wdb2ts/locationforecast?lat={lat};long={lon}"
-    try:
-        resp = requests.get(url, headers={"User-Agent": "MetGPT/1.0"}, timeout=8)
-        resp.raise_for_status()
-        root = ET.fromstring(resp.content)
-    except Exception as e:
-        logger.error("Met Éireann error: %s", e)
-        return {}
+    resp = None
+    for attempt in range(1, MET_API_ATTEMPTS + 1):
+        try:
+            resp = requests.get(url, headers={"User-Agent": "MetGPT/1.0"},
+                                timeout=MET_API_TIMEOUT)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+            break
+        except Exception as e:
+            logger.error("Met Éireann fetch failed (attempt %d/%d) lat=%s lon=%s: %s: %s",
+                         attempt, MET_API_ATTEMPTS, lat, lon, type(e).__name__, e)
+    else:
+        return {}, "unreachable"
 
     product = root.find("product")
     if product is None:
-        return {}
+        logger.error("Met Éireann returned no <product> element for lat=%s lon=%s (%d bytes)",
+                     lat, lon, len(resp.content))
+        return {}, "empty"
 
     def gattr(node, tag, attr, cast=float):
         child = node.find(tag)
@@ -1002,7 +1025,12 @@ def fetch_forecast(lat, lon):
             "wind_avg": round(sum(s["winds"]) / len(s["winds"]), 1) if s["winds"] else None,
         })
 
-    return all_forecasts
+    if not all_forecasts:
+        logger.error("Met Éireann returned no usable time steps for lat=%s lon=%s (%d bytes)",
+                     lat, lon, len(resp.content))
+        return {}, "empty"
+
+    return all_forecasts, None
 
 
 # ─── Met Éireann warnings ─────────────────────────────────────────────────────
@@ -1353,9 +1381,16 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
         key = (round(lat, 4), round(lon, 4))
         forecasts = _cached_locations.get(key)
         if not forecasts:
-            forecasts = fetch_forecast(lat, lon)
+            forecasts, fetch_error = fetch_forecast(lat, lon)
             if not forecasts:
-                responses.append({"type": "error", "text": f"Could not fetch forecast for {display_name}."})
+                if fetch_error == "unreachable":
+                    text = (f"I couldn't reach Met Éireann's forecast service just now, so I have "
+                            f"nothing for {display_name}. That's usually brief — try again in a "
+                            f"moment.")
+                else:
+                    text = (f"Met Éireann answered but sent no forecast data for {display_name}. "
+                            f"Try again shortly, or try a nearby town.")
+                responses.append({"type": "error", "text": text})
                 continue
             _cached_locations[key] = forecasts
 
