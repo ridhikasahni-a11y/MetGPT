@@ -15,6 +15,7 @@ connection.allowed_gai_family = allowed_gai_family
 
 import os, json, re, logging, secrets, threading, xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from functools import wraps
 from time import time
 
@@ -505,6 +506,176 @@ def get_ip_location():
     return None, None, None
 
 
+# ─── Display rounding ─────────────────────────────────────────────────────────
+# A forecast should never be shown to more precision than it is actually
+# accurate to. Everything the user or the LLM sees passes through these
+# helpers. Raw values are kept internally only so that aggregates (e.g. the
+# daily rainfall total) are computed before being rounded, not after.
+
+def _half_up(v):
+    """Round half away from zero (12.5 -> 13), not Python's banker's rounding
+    (which gives 12). Half-up is what a reader expects of a forecast figure."""
+    return int(Decimal(repr(float(v))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def round_temp(v):
+    """Temperature to the nearest whole degree."""
+    return None if v is None else _half_up(v)
+
+
+def round_wind_ms(v):
+    """Wind speed in m/s to the nearest whole number."""
+    return None if v is None else _half_up(v)
+
+
+def ms_to_kmh(v):
+    """Wind speed in km/h to the nearest 5, converted from the raw m/s value."""
+    return None if v is None else _half_up(v * 3.6 / 5.0) * 5
+
+
+def ms_to_mph(v):
+    """Wind speed in mph to the nearest 5, converted from the raw m/s value."""
+    return None if v is None else _half_up(v * 2.23694 / 5.0) * 5
+
+
+def round_rain(v):
+    """Rainfall to the nearest mm once it is over 2 mm, otherwise to 0.1 mm."""
+    if v is None:
+        return None
+    return float(_half_up(v)) if v >= 2 else float(_half_up(v * 10)) / 10.0
+
+
+def round_pct(v, step=5):
+    """Any percentage to the nearest `step` per cent."""
+    return None if v is None else _half_up(v / float(step)) * step
+
+
+def format_rain(v):
+    """Rainfall as display text, e.g. '0 mm', '0.6 mm', '4 mm'."""
+    r = round_rain(v)
+    if r is None:
+        return None
+    return "%d mm" % int(r) if r >= 2 or r == 0 else "%.1f mm" % r
+
+
+def format_prob(v):
+    """Probability to the nearest 5%, never claiming total certainty."""
+    p = round_pct(v)
+    if p is None:
+        return None
+    if p <= 0:
+        return "<5%"
+    if p >= 100:
+        return ">95%"
+    return "%d%%" % p
+
+
+def format_temp_range(tmin, tmax, unit="°C"):
+    """A min-max temperature range in whole degrees, collapsed if they match."""
+    a, b = round_temp(tmin), round_temp(tmax)
+    if a is None and b is None:
+        return "N/A"
+    if a is None or b is None:
+        return "%d%s" % (b if a is None else a, unit)
+    return "%d%s" % (a, unit) if a == b else "%d–%d%s" % (a, b, unit)
+
+
+# Roughly how long rain stays correlated with itself, in hours. A day is
+# treated as about 24 / RAIN_BLOCK_HOURS independent weather episodes rather
+# than 24 independent hours. Lower it to make the daily chance bolder, raise
+# it to make it more conservative; at 24 it collapses to the wettest hour.
+RAIN_BLOCK_HOURS = 6
+
+
+def daily_rain_probability(hourly_rows):
+    """The chance of rain at some point during the day.
+
+    This used to be the mean of the hourly probabilities, which answers a
+    different question: the average hourly chance is not the chance of rain at
+    some point, and it understates it badly. A day of 24 hours each at 30%
+    averages to 30%, but you would plainly expect rain at some stage.
+
+    Averaging is wrong, and so is the opposite extreme of treating the hours as
+    independent and combining them as 1 - prod(1 - p_i): rain is strongly
+    autocorrelated, so those same 24 hours would come out at 99.98%, which is
+    nonsense. So the day is split into blocks of RAIN_BLOCK_HOURS, each block
+    is represented by its wettest hour, and the blocks are then combined as if
+    independent. That is the usual effective-sample-size argument — a day holds
+    roughly 24/tau independent episodes, not 24 — and it puts the answer
+    between the two extremes (the 24-hour example lands at 76%).
+
+    Blocking is done on the clock hour, not on position in the list, so it
+    behaves the same way on the later forecast days where Met Éireann switches
+    from hourly to 6-hourly steps.
+
+    The result is never below the wettest single hour, which is the
+    mathematical floor for "rain at some point", and never above 100%.
+    """
+    blocks = {}
+    for row in hourly_rows:
+        prob = row.get("rain_prob")
+        if prob is None:
+            continue
+        try:
+            hour = int(str(row.get("time_str", "")).split(":")[0])
+        except (TypeError, ValueError):
+            continue
+        q = min(max(prob / 100.0, 0.0), 1.0)
+        key = hour // RAIN_BLOCK_HOURS
+        blocks[key] = max(blocks.get(key, 0.0), q)
+
+    if not blocks:
+        return None
+
+    dry = 1.0
+    for q in blocks.values():
+        dry *= (1.0 - q)
+    return round((1.0 - dry) * 100.0, 1)
+
+
+def display_day(fc):
+    """Round a daily forecast for display and for the LLM prompt."""
+    wind_raw = fc.get("wind_avg")
+    rain_raw = fc.get("rain_total")
+    prob_raw = fc.get("rain_prob_day")
+    return {
+        "temp_min": round_temp(fc.get("temp_min")),
+        "temp_max": round_temp(fc.get("temp_max")),
+        "temp_text": format_temp_range(fc.get("temp_min"), fc.get("temp_max")),
+        "rain_total": round_rain(rain_raw),
+        "rain_text": format_rain(rain_raw),
+        "rain_prob": round_pct(prob_raw),
+        "rain_prob_text": format_prob(prob_raw),
+        "wind_ms": round_wind_ms(wind_raw),
+        "wind_kmh": ms_to_kmh(wind_raw),
+        "wind_mph": ms_to_mph(wind_raw),
+        "humidity": round_pct(fc.get("humidity_avg")),
+    }
+
+
+def display_hour(hr):
+    """Round a single hourly row for display and for the LLM prompt."""
+    wind_raw = hr.get("wind")
+    gust_raw = hr.get("wind_gust")
+    return {
+        "time_str": hr.get("time_str", ""),
+        "temperature": round_temp(hr.get("temperature")),
+        "rain_mm": round_rain(hr.get("rain_mm")),
+        "rain_text": format_rain(hr.get("rain_mm")),
+        "rain_prob": round_pct(hr.get("rain_prob")),
+        "rain_prob_text": format_prob(hr.get("rain_prob")),
+        "wind_ms": round_wind_ms(wind_raw),
+        "wind_kmh": ms_to_kmh(wind_raw),
+        "wind_gust_ms": round_wind_ms(gust_raw),
+        "wind_gust_kmh": ms_to_kmh(gust_raw),
+        "wind_direction": hr.get("wind_direction"),
+        "cloudiness": round_pct(hr.get("cloudiness")),
+        "humidity": round_pct(hr.get("humidity")),
+        "dew_point": round_temp(hr.get("dew_point")),
+        "pressure": None if hr.get("pressure") is None else int(round(hr["pressure"])),
+    }
+
+
 # ─── Met Éireann forecast ─────────────────────────────────────────────────────
 
 # Not cached here: results are cached in _cached_locations (with a TTL), and
@@ -585,10 +756,9 @@ def fetch_forecast(lat, lon):
     daily_stats = {}
     for row in hourly.values():
         d = row["date_str"]
-        stats = daily_stats.setdefault(d, {"temps": [], "rains": [], "probs": [], "hums": [], "winds": []})
+        stats = daily_stats.setdefault(d, {"temps": [], "rains": [], "hums": [], "winds": []})
         if row.get("temperature") is not None: stats["temps"].append(row["temperature"])
         if row.get("rain_mm") is not None: stats["rains"].append(row["rain_mm"])
-        if row.get("rain_prob") is not None: stats["probs"].append(row["rain_prob"])
         if row.get("humidity") is not None: stats["hums"].append(row["humidity"])
         if row.get("wind") is not None: stats["winds"].append(row["wind"])
         day = all_forecasts.setdefault(d, {"forecast": {"date": d}, "hourly_data": []})
@@ -601,7 +771,8 @@ def fetch_forecast(lat, lon):
             "temp_min": round(min(s["temps"]), 1) if s["temps"] else None,
             "temp_max": round(max(s["temps"]), 1) if s["temps"] else None,
             "rain_total": round(sum(s["rains"]), 1) if s["rains"] else None,
-            "rain_prob_avg": round(sum(s["probs"]) / len(s["probs"]), 1) if s["probs"] else None,
+            # Chance of rain at some point in the day, not the mean hourly chance.
+            "rain_prob_day": daily_rain_probability(all_forecasts[d]["hourly_data"]),
             "humidity_avg": round(sum(s["hums"]) / len(s["hums"]), 0) if s["hums"] else None,
             "wind_avg": round(sum(s["winds"]) / len(s["winds"]), 1) if s["winds"] else None,
         })
@@ -671,26 +842,27 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
     user_ctx = session.get("user_context", "").strip()
     intro = f"User profile: {user_ctx}\n\n" if user_ctx else ""
 
+    # Every figure here has already been rounded by display_day/display_hour,
+    # so the prompt, the forecast cards and the hourly table can never disagree
+    # and the model is never shown spurious precision it might echo back.
     lines = []
     for f in forecasts:
         loc = f.get("location", "N/A")
         date = f.get("date", "N/A")
-        fc = f.get("forecast", {})
-        tmin, tmax = fc.get("temp_min"), fc.get("temp_max")
-        wind_ms = fc.get('wind_avg')
-        wind_kmh = round(wind_ms * 3.6) if wind_ms is not None else None
+        d = f.get("display", {})
         lines.append(
             f"Location: {loc}, Date: {date} | "
-            f"Temp: {tmin}-{tmax}°C | "
-            f"Rain: {fc.get('rain_total')}mm ({fc.get('rain_prob_avg')}% chance) | "
-            f"Wind: {wind_ms} m/s ({wind_kmh} km/h) | Humidity: {fc.get('humidity_avg')}%"
+            f"Temp: {d.get('temp_text')} | "
+            f"Rain: {d.get('rain_text')} ({d.get('rain_prob_text')} chance) | "
+            f"Wind: {d.get('wind_ms')} m/s ({d.get('wind_kmh')} km/h) | "
+            f"Humidity: {d.get('humidity')}%"
         )
-        for hr in sorted(f.get("hourly_data", []), key=lambda x: x.get("time_str", "")):
+        for hr in f.get("hourly", []):
             parts = []
             if hr.get("temperature") is not None: parts.append(f"{hr['temperature']}°C")
-            if hr.get("rain_mm") is not None: parts.append(f"rain {hr['rain_mm']}mm")
-            if hr.get("rain_prob") is not None: parts.append(f"{hr['rain_prob']}% chance")
-            if hr.get("wind") is not None: parts.append(f"wind {hr['wind']}m/s")
+            if hr.get("rain_text") is not None: parts.append(f"rain {hr['rain_text']}")
+            if hr.get("rain_prob_text") is not None: parts.append(f"{hr['rain_prob_text']} chance")
+            if hr.get("wind_ms") is not None: parts.append(f"wind {hr['wind_ms']} m/s ({hr['wind_kmh']} km/h)")
             if hr.get("wind_direction"): parts.append(hr["wind_direction"])
             if hr.get("cloudiness") is not None: parts.append(f"cloud {hr['cloudiness']}%")
             if hr.get("dew_point") is not None: parts.append(f"dew {hr['dew_point']}°C")
@@ -737,7 +909,16 @@ def generate_advice(forecasts, activities, user_text, history, query_type):
     prompt = f"""{intro}You are MetGPT, a helpful Irish weather assistant. Today is {today_str}.
 When mentioning any date, calculate the correct day of the week from the date string in the data — do not guess. This query is classified as "{query_type}".
 Always give temperatures in Celsius only, e.g. "around 19°C". Never mention Fahrenheit.
-Always give wind speed in both m/s and km/h, e.g. "around 4 m/s (14 km/h)".
+Always give wind speed in both m/s and km/h, e.g. "around 5 m/s (20 km/h)".
+
+PRECISION — this matters. A forecast is only so accurate, so never state a number more precisely than the data below:
+- Temperatures: whole degrees only, e.g. "14°C". Never a decimal place.
+- Wind: whole m/s, and km/h to the nearest 5, e.g. "5 m/s (20 km/h)".
+- Rainfall: write it exactly as given below, e.g. "4 mm" or "0.6 mm".
+- Probabilities: to the nearest 5%, e.g. "35%". Never write 0% or 100% — we are never that certain. Use "<5%" or ">95%" (or wording like "very unlikely" / "almost certain") instead.
+- Humidity and cloud cover: to the nearest 5%.
+The daily rain chance below is the chance of rain at SOME POINT that day, not the chance in any one hour, so describe it that way. The per-hour figures in the hourly breakdown are the chance in that hour.
+Repeat the figures below as they are written. If you work out any figure yourself (an average, a range, a maximum, a conversion), round it the same way before writing it.
 Always be polite, friendly, and never rude or offensive to people. Do not swear ever. Do not criticise Met Éireann.
 {pollen_note}{length_note}{range_note}
 User asked: {user_text}
@@ -952,24 +1133,26 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
         if date_iso in forecasts:
             day = forecasts[date_iso]
             fc = day["forecast"]
+            # Round once, here, and reuse for both the forecast card and the
+            # advice prompt so the two can never show different numbers.
+            shown = display_day(fc)
+            hours = [
+                display_hour(h)
+                for h in sorted(day["hourly_data"], key=lambda x: x.get("time_str", ""))
+            ]
             all_for_advice.append({
                 "location": display_name,
                 "date": date_iso,
-                "forecast": fc,
-                "hourly_data": day["hourly_data"],
+                "display": shown,
+                "hourly": hours,
             })
             responses.append({
                 "type": "forecast",
                 "location": display_name,
                 "date": date_iso,
-                "temp_min": fc.get("temp_min"),
-                "temp_max": fc.get("temp_max"),
-                "rain_total": fc.get("rain_total"),
-                "rain_prob": fc.get("rain_prob_avg"),
-                "wind_avg": fc.get("wind_avg"),
-                "humidity": fc.get("humidity_avg"),
                 "compact": is_multi,
-                "hourly": sorted(day["hourly_data"], key=lambda x: x.get("time_str", "")),
+                "hourly": hours,
+                **shown,
             })
         else:
             responses.append({"type": "error", "text": f"No forecast available for {display_name} on {date_iso}. Met Éireann only forecasts about 9 days ahead."})
