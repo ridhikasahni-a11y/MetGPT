@@ -1203,7 +1203,7 @@ def process_query(user_text, prev_locs=None, prev_dates=None):
             "type": "advice",
             "text": ("I'm MetGPT, an Irish weather assistant, so I can only help with weather "
                      "questions for locations in Ireland. Try asking me something like "
-                     "\"Will it rain in Galway tomorrow?\""),
+                     "\"Will it rain tomorrow?\""),
         })
         return responses, prev_locs or [], prev_dates or []
 
