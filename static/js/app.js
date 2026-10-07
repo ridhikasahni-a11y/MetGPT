@@ -163,7 +163,7 @@ function renderResponses(responses) {
     } else if (r.type === 'advice') {
       const el = document.createElement('div');
       el.className = 'advice-bubble';
-      el.innerHTML = renderMarkdown(r.text);
+      el.dataset.fullText = r.text;   // typed out once the bubble is on screen
       content.appendChild(el);
       hasContent = true;
     }
@@ -179,7 +179,44 @@ function renderResponses(responses) {
   if (hasContent) {
     chatWindow.appendChild(wrapper);
     scrollBottom();
+    content.querySelectorAll('.advice-bubble').forEach(el => typeOut(el, el.dataset.fullText));
   }
+}
+
+// ─── Typewriter effect ───────────────────────────────────────────────────────
+// The full answer has already arrived from the server; this just reveals it a
+// few characters at a time so it looks like MetGPT is typing. Long answers
+// type faster so nothing takes more than about TYPE_MAX_MS to appear.
+const TYPE_TICK_MS = 15;     // time between updates
+const TYPE_MAX_MS  = 4000;   // longest any answer should take to type out
+
+function typeOut(el, text) {
+  const reduceMotion = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!text || reduceMotion) {
+    el.innerHTML = renderMarkdown(text || '');
+    return;
+  }
+
+  const ticks = TYPE_MAX_MS / TYPE_TICK_MS;
+  const step = Math.max(1, Math.ceil(text.length / ticks));
+  let shown = 0;
+  el.classList.add('typing-active');
+
+  const timer = setInterval(() => {
+    // Was the reader at the bottom before this update? Only follow the text
+    // down if so, so we don't yank them back while they scroll up.
+    const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 40;
+
+    shown = Math.min(text.length, shown + step);
+    el.innerHTML = renderMarkdown(text.slice(0, shown));
+
+    if (atBottom) scrollBottom();
+    if (shown >= text.length) {
+      clearInterval(timer);
+      el.classList.remove('typing-active');
+    }
+  }, TYPE_TICK_MS);
 }
 
 // Pick a weather icon from the forecast values.
