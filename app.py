@@ -298,14 +298,46 @@ Conversation so far (most recent last):
 
 New message: "{user_text}"
 
+People use this assistant to plan their day, so most messages are IMPLICIT weather
+questions even when they never say "weather". Mentioning an activity, event, plan,
+outfit, journey or time is asking what the weather will be like for it. All of these
+are weather questions:
+  "Tennis on Saturday or Sunday morning at 8am?"
+  "Golf tomorrow?"
+  "BBQ on Sunday evening"
+  "Walking the dog at 7"
+  "Drying clothes outside today?"
+  "Cycling to work in Dublin"
+  "Shorts or jeans for Cork tomorrow?"
+
 Classify the NEW message as exactly one word:
-- "followup"   = a weather question that builds on the previous weather request (same place/activity, or just changes the day, e.g. "and tomorrow?", "what about the weekend?")
-- "standalone" = a new weather request (mentions a new place, activity, or starts a fresh weather question)
-- "junk"       = NOT a weather question at all (a simple greeting is fine, but coding help, maths, general chit-chat, or anything unrelated to weather is junk)
+- "followup"   = a weather question that builds on the previous weather request (same place/activity, or just changes the day or time, e.g. "and tomorrow?", "what about the weekend?", "8am instead?")
+- "standalone" = a new weather request, stated or implied (a new place, activity, plan, day or time)
+- "junk"       = clearly has NOTHING to do with weather, the outdoors or planning a day (for example coding help, maths homework, trivia, or writing an essay). A simple greeting is not junk.
+
+If there is any doubt, do NOT answer junk.
 
 Reply with exactly one word: followup, standalone, or junk."""
     raw = call_llm_throttled(prompt).strip().lower()
-    return raw if raw in {"followup", "standalone", "junk"} else "standalone"
+    label = raw if raw in {"followup", "standalone", "junk"} else "standalone"
+
+    # Safety net: a message that mentions a day, a time of day or a clock time
+    # is almost always someone planning around the weather, so never bin it.
+    if label == "junk" and _PLANNING_WORDS.search(user_text):
+        logger.info("Classifier said junk but message mentions a day/time; treating as weather: %r", user_text)
+        label = "followup" if history else "standalone"
+    return label
+
+
+_PLANNING_WORDS = re.compile(
+    r"\b("
+    r"today|tonight|tomorrow|tmrw?|tom|weekend|this week|next week|"
+    r"mon(day)?|tue(s|sday)?|wed(nesday)?|thu(rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?|"
+    r"morning|afternoon|evening|night|lunchtime|"
+    r"\d{1,2}(:\d{2})?\s*(am|pm)|\d{1,2}:\d{2}"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 # ─── Geocoding ────────────────────────────────────────────────────────────────
